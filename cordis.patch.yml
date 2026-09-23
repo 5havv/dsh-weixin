@@ -1,0 +1,39 @@
+# Bundle patch for @5havv/dsh-weixin.
+#
+# Applied when a profile lists this package in `dsh.profile.bundles` (i.e. after
+# `dsh plugin add @5havv/dsh-weixin`). Two independent plugin rows are inserted:
+#
+#   weixin         the channel service (ctx.weixin + weixin_send tool)
+#   weixin-bridge  inbound WeChat -> agent -> reply relay
+#
+# The bridge is disabled by default: enabling a channel is a deliberate act, and
+# the service alone is useful (tools, proactive sends) without auto-replying.
+#
+# Users override any of these values from their own profile cordis.patch.yml —
+# a later layer replaces the whole `config` value of the matching row id.
+- insert:
+    - id: weixin
+      name: '@5havv/dsh-weixin'
+      config:
+        # Empty dataDir resolves to $DSH_HOME/weixin.
+        dataDir: ''
+        # Accounts to connect. Empty connects every stored account; the QR login
+        # flow (npm run smoke -- login) is what registers an account.
+        accounts: []
+        autoConnect: true
+        toolEnabled: true
+        botAgent: dsh-weixin
+        pollTimeoutMs: 35000
+        maxMessageLength: 4000
+    - id: weixin-bridge
+      name: '@5havv/dsh-weixin/bridge'
+      config:
+        enabled: false
+        sessionMode: per-peer
+        dmPolicy: allowlist
+        allowlist: []
+        groupPolicy: disabled
+        groupAllowlist: []
+        agentPreset: ''
+        provider: ''
+        model: ''

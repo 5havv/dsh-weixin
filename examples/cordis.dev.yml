@@ -1,0 +1,23 @@
+# Development overlay: load the plugin from this working tree by absolute path.
+#
+#   dsh --profile web --patch ./examples/cordis.dev.yml --dump-config
+#   dsh --profile web --patch ./examples/cordis.dev.yml
+#
+# Replace the directory below if the checkout lives somewhere else.
+- insert:
+    - id: weixin
+      name: '/path/to/dsh-weixin/src/index.ts'
+      config:
+        # Empty dataDir means $DSH_HOME/weixin.
+        dataDir: ''
+        # Keep the poll closed until accounts are known to be free (the iLink
+        # token allows only one live consumer).
+        autoConnect: false
+        toolEnabled: true
+    - id: weixin-bridge
+      name: '/path/to/dsh-weixin/src/bridge/index.ts'
+      config:
+        enabled: false
+        sessionMode: per-peer
+        dmPolicy: allowlist
+        allowlist: []
