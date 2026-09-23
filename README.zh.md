@@ -62,9 +62,17 @@ npm run smoke -- send <accountId> <toUserId> 'hello'
 开发期用绝对路径覆盖层（不改动已安装的 profile）：
 
 ```sh
+npm run build                                                       # 必须先构建，见下方说明
 dsh --profile web --patch ./examples/cordis.dev.yml --dump-config   # 只看组装结果
 dsh --profile web --patch ./examples/cordis.dev.yml                 # 实际启动
 ```
+
+> ⚠️ **开发覆盖层要指向 `lib/`，不能指向 `src/*.ts`。**
+> DSH 的 loader 用 Node ESM 直接解析插件入口，**不做 TypeScript 转译**；而本仓库源码使用
+> NodeNext 风格的 `./service.js` 说明符（对编译产物正确），直读 `.ts` 会在启动时报
+> `ERR_MODULE_NOT_FOUND: Cannot find module '.../src/service.js'`。
+> 注意 `--dump-config` 只组装配置、**不导入入口模块**，所以它不会暴露这个问题——改完路径务必真正启动一次。
+> 每次改动源码后先 `npm run build`。
 
 正式安装：
 

@@ -69,9 +69,19 @@ export class StubAgent {
   }
 }
 
+/** Creation options recorded by {@link StubAgents}. */
+export interface RecordedCreateOptions {
+  sessionId: unknown;
+  agentOptions?: { provider?: string; model?: string; reasoningEffort?: unknown };
+  agentPreset?: string;
+  cwd?: string;
+}
+
 /** Stand-in for the agent registry. */
 export class StubAgents extends Service {
   readonly agents = new Map<string, StubAgent>();
+  /** Every `create` call, in order, with the options the bridge passed. */
+  readonly createOptions: RecordedCreateOptions[] = [];
   createCalls = 0;
 
   constructor(ctx: Context) {
@@ -82,8 +92,18 @@ export class StubAgents extends Service {
     return this.agents.get(String(id));
   }
 
-  async create(options: { sessionId: unknown }): Promise<{ agent: StubAgent; dispose(): Promise<void> }> {
+  async create(options: {
+    sessionId: unknown;
+    agentOptions?: RecordedCreateOptions['agentOptions'];
+    meta?: { cwd?: string; agentPreset?: string };
+  }): Promise<{ agent: StubAgent; dispose(): Promise<void> }> {
     const id = String(options.sessionId);
+    this.createOptions.push({
+      sessionId: options.sessionId,
+      ...(options.agentOptions ? { agentOptions: options.agentOptions } : {}),
+      ...(options.meta?.agentPreset ? { agentPreset: options.meta.agentPreset } : {}),
+      ...(options.meta?.cwd ? { cwd: options.meta.cwd } : {}),
+    });
     const agent = new StubAgent(id);
     this.agents.set(id, agent);
     this.createCalls += 1;
@@ -92,6 +112,31 @@ export class StubAgents extends Service {
 
   async resume(): Promise<{ agent: StubAgent; dispose(): Promise<void> }> {
     throw new Error('stub: no persisted session');
+  }
+}
+
+/**
+ * Stand-in for `ctx.agentDefaultModel`.
+ *
+ * The agent loop applies no default model of its own, so a bridge that omits
+ * `agentOptions` produces an agent whose first request fails with an empty
+ * provider. This stub lets the integration checks assert the bridge reads the
+ * deployment default.
+ */
+export class StubAgentDefaultModel extends Service {
+  constructor(
+    ctx: Context,
+    private readonly selection: {
+      provider: string;
+      model: string;
+      reasoningEffort?: unknown;
+    } = { provider: 'stub-provider', model: 'stub-model' },
+  ) {
+    super(ctx, 'agentDefaultModel');
+  }
+
+  currentSelection(): { provider: string; model: string; reasoningEffort?: unknown } {
+    return this.selection;
   }
 }
 

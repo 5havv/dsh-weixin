@@ -42,7 +42,8 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "verify": "tsx scripts/verify-plugin.ts && tsx scripts/verify-bridge.ts",
-    "smoke": "tsx src/smoke.ts"
+    "smoke": "tsx src/smoke.ts",
+    "dev": "npm run build && dsh --profile web --patch ./examples/cordis.dev.yml"
   },
   "dependencies": {
     "qrcode-terminal": "^0.12.0"

@@ -12,7 +12,13 @@
 import { Context } from '@deepseek-ai/cordis';
 
 import { apply as applyBridge } from '../src/bridge/index.js';
-import { StubAgents, StubSystemPrompt, StubTools, StubWeixin } from './stubs.js';
+import {
+  StubAgentDefaultModel,
+  StubAgents,
+  StubSystemPrompt,
+  StubTools,
+  StubWeixin,
+} from './stubs.js';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`verify-bridge: ${message}`);
@@ -28,12 +34,19 @@ interface Host {
   dispose(): Promise<void>;
 }
 
-async function boot(bridgeConfig: Record<string, unknown>): Promise<Host> {
+async function boot(
+  bridgeConfig: Record<string, unknown>,
+  defaultModel: { provider: string; model: string } = {
+    provider: 'stub-provider',
+    model: 'stub-model',
+  },
+): Promise<Host> {
   const ctx = new Context();
   await ctx.plugin(StubTools);
   await ctx.plugin(StubSystemPrompt);
   await ctx.plugin(StubWeixin);
   await ctx.plugin(StubAgents);
+  await ctx.plugin(StubAgentDefaultModel, defaultModel);
   const fiber = await ctx.plugin({ inject: ['weixin', 'agents'], apply: applyBridge }, bridgeConfig);
   return {
     ctx,
@@ -103,6 +116,21 @@ async function main(): Promise<void> {
     assert(agent.sent[0]!.target === 'next-turn', 'the message should open its own turn');
     assert(agent.sent[0]!.wakeup === true, 'the message should wake the agent');
 
+    // Regression: the agent loop applies no default model, so a bridge-created
+    // agent must carry the deployment's selection or its first request fails.
+    assert(
+      host.agents.createOptions[0]?.agentOptions?.provider === 'stub-provider',
+      'the bridge must pass the deployment default provider',
+    );
+    assert(
+      host.agents.createOptions[0]?.agentOptions?.model === 'stub-model',
+      'the bridge must pass the deployment default model',
+    );
+    assert(
+      typeof host.agents.createOptions[0]?.cwd === 'string',
+      'the bridge must pass an absolute cwd',
+    );
+
     // ── 2. the assembled assistant reply is sent back to the same peer ───────
     assistantTurn(host, 'weixin:acct@im.bot:peer-a@im.wechat', '你好，我是 DSH。');
     await tick();
@@ -167,6 +195,24 @@ async function main(): Promise<void> {
     await host.dispose();
   }
 
+  // ── 5b. an explicit provider+model in config wins over the deployment default ──
+  {
+    const host = await boot({
+      enabled: true,
+      dmPolicy: 'open',
+      provider: 'cfg-provider',
+      model: 'cfg-model',
+    });
+    inbound(host, 'peer-a@im.wechat', 'hi');
+    await tick();
+    assert(
+      host.agents.createOptions[0]?.agentOptions?.provider === 'cfg-provider' &&
+        host.agents.createOptions[0]?.agentOptions?.model === 'cfg-model',
+      'configured provider/model must override the deployment default',
+    );
+    await host.dispose();
+  }
+
   // ── 6. interleaved turns keep their own reply buffers ─────────────────────
   {
     const host = await boot({ enabled: true, dmPolicy: 'open' });
@@ -195,7 +241,6 @@ async function main(): Promise<void> {
     '✅ verify-bridge: routing, reply relay, policy, bursts, and interleaved turns all behave\n',
   );
 }
-
 main().catch((error: unknown) => {
   process.stderr.write(
     `❌ verify-bridge failed: ${error instanceof Error ? error.stack : String(error)}\n`,

@@ -36,9 +36,16 @@ npm run smoke -- listen             # print inbound messages
 Load it into DSH from a working tree:
 
 ```sh
+npm run build                        # required: DSH does not transpile TS entries
 dsh --profile web --patch ./examples/cordis.dev.yml --dump-config
 dsh --profile web --patch ./examples/cordis.dev.yml
 ```
+
+> The overlay points at `lib/`, not `src/*.ts`: DSH resolves plugin entries with
+> Node's ESM loader and does not transpile TypeScript, so a `src/index.ts` entry
+> fails at boot with `ERR_MODULE_NOT_FOUND` on its `./x.js` specifiers.
+> `--dump-config` only composes config and never imports the entry, so it will
+> not surface this — always boot once after changing those paths.
 
 > The iLink backend allows only **one live consumer per token**. Stop any other
 > gateway using the same account first.

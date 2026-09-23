@@ -1,12 +1,24 @@
 # Development overlay: load the plugin from this working tree by absolute path.
 #
+#   npm run build                       # required — see the note below
 #   dsh --profile web --patch ./examples/cordis.dev.yml --dump-config
 #   dsh --profile web --patch ./examples/cordis.dev.yml
+#
+# NOTE — why this points at `lib/` and not `src/`:
+# DSH's loader resolves each entry with Node's ESM loader and does NOT transpile
+# TypeScript. Our sources use NodeNext specifiers (`./service.js`) so they only
+# resolve against compiled output. Pointing an entry at `src/index.ts` fails at
+# boot with:
+#   ERR_MODULE_NOT_FOUND: Cannot find module '.../src/service.js'
+# `--dump-config` does not import the entry, so it will NOT catch this — always
+# boot the app, not just the dump, after changing these paths.
+#
+# Run `npm run build` after every source change before booting.
 #
 # Replace the directory below if the checkout lives somewhere else.
 - insert:
     - id: weixin
-      name: '/path/to/dsh-weixin/src/index.ts'
+      name: '/path/to/dsh-weixin/lib/index.js'
       config:
         # Empty dataDir means $DSH_HOME/weixin.
         dataDir: ''
@@ -15,7 +27,7 @@
         autoConnect: false
         toolEnabled: true
     - id: weixin-bridge
-      name: '/path/to/dsh-weixin/src/bridge/index.ts'
+      name: '/path/to/dsh-weixin/lib/bridge/index.js'
       config:
         enabled: false
         sessionMode: per-peer

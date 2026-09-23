@@ -13,8 +13,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis';
-import type { Agent } from '@deepseek-ai/dsh-agent';
-import { createUserMessage, type AssistantMessage } from '@deepseek-ai/dsh-llm';
+import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent';
+import {
+  createUserMessage,
+  type AssistantMessage,
+  type ReasoningEffortId,
+} from '@deepseek-ai/dsh-llm';
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
 
 import type { WeixinInboundMessage } from '../service.js';
@@ -67,6 +71,48 @@ function isAllowed(message: WeixinInboundMessage, config: BridgeConfig): boolean
   return true;
 }
 
+/** Structural view of the deployment's default-model service (`ctx.agentDefaultModel`). */
+interface DefaultModelService {
+  currentSelection(): { provider: string; model: string; reasoningEffort?: ReasoningEffortId };
+}
+
+/**
+ * Resolve the model for agents this bridge creates.
+ *
+ * The agent loop applies no default model of its own: every other
+ * agent-creating subsystem (`dsh-webhook`, `dsh-headless`, the web session
+ * controller) reads `agentDefaultModel.currentSelection()` explicitly. Without
+ * this, a created agent's very first model request fails immediately with an
+ * empty provider.
+ *
+ * @param ctx - context that may carry the deployment's default-model service.
+ * @param config - bridge config; an explicit provider+model pair wins when both are set.
+ * @returns options for `agents.create`/`resume`, or undefined when none can be resolved.
+ */
+function resolveAgentOptions(ctx: Context, config: BridgeConfig): AgentOptions | undefined {
+  if (config.provider && config.model) {
+    return { provider: config.provider, model: config.model };
+  }
+  // `agentDefaultModel` is optional: not every composition mounts it, and this
+  // plugin must not fail to load because it is absent.
+  const service = (ctx as unknown as { get(name: string): unknown }).get('agentDefaultModel') as
+    | DefaultModelService
+    | undefined;
+  try {
+    const selected = service?.currentSelection();
+    if (selected?.provider && selected?.model) {
+      return {
+        provider: selected.provider,
+        model: selected.model,
+        ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}),
+      };
+    }
+  } catch {
+    // A default-model service mid-teardown simply resolves to none.
+  }
+  return undefined;
+}
+
 /** Concatenate the text blocks of one assembled assistant message. */
 function textOf(message: AssistantMessage): string {
   const parts: string[] = [];
@@ -84,6 +130,11 @@ function textOf(message: AssistantMessage): string {
  */
 export function apply(ctx: Context, config: BridgeConfig): void {
   if (config.enabled === false) return;
+
+  ctx.logger?.info?.(
+    `weixin-bridge: enabled (sessionMode=${config.sessionMode ?? 'per-peer'}, ` +
+      `dmPolicy=${config.dmPolicy ?? 'open'}, groupPolicy=${config.groupPolicy ?? 'disabled'})`,
+  );
 
   /** sessionId -> conversation routing. */
   const links = new Map<string, PeerLink>();
@@ -127,16 +178,19 @@ export function apply(ctx: Context, config: BridgeConfig): void {
       const live = ctx.agents.get(sessionId);
       if (live) return live;
 
-      const agentOptions: { provider?: string; model?: string } = {
-        ...(config.provider ? { provider: config.provider } : {}),
-        ...(config.model ? { model: config.model } : {}),
-      };
+      const agentOptions = resolveAgentOptions(ctx, config);
+      if (!agentOptions) {
+        ctx.logger?.warn?.(
+          'weixin-bridge: no model resolved (config provider/model empty and agentDefaultModel ' +
+            'unavailable) — the agent will fail its first request',
+        );
+      }
 
       if (ctx.get('sessionPersistence')) {
         try {
           const handle = await ctx.agents.resume({
             resumeSessionId: sessionId,
-            ...(Object.keys(agentOptions).length > 0 ? { agentOptions } : {}),
+            ...(agentOptions ? { agentOptions } : {}),
             setup,
           });
           return handle.agent;
@@ -151,7 +205,7 @@ export function apply(ctx: Context, config: BridgeConfig): void {
           cwd: process.cwd(),
           ...(config.agentPreset ? { agentPreset: config.agentPreset } : {}),
         },
-        ...(Object.keys(agentOptions).length > 0 ? { agentOptions } : {}),
+        ...(agentOptions ? { agentOptions } : {}),
         setup,
       });
       return handle.agent;
@@ -188,6 +242,9 @@ export function apply(ctx: Context, config: BridgeConfig): void {
         'next-turn',
         true,
       );
+      ctx.logger?.info?.(
+        `weixin-bridge: dispatched message from ${message.fromUserId} to session ${sessionId}`,
+      );
     } catch (error) {
       ctx.logger?.warn?.(
         `weixin-bridge: failed to dispatch message from ${message.fromUserId}: ${String(error)}`,
@@ -219,6 +276,9 @@ export function apply(ctx: Context, config: BridgeConfig): void {
 
     void ctx.weixin
       .sendText(link.accountId, link.peerId, reply)
+      .then(() => {
+        ctx.logger?.info?.(`weixin-bridge: replied to ${link.peerId} (${reply.length} chars)`);
+      })
       .catch((error: unknown) => {
         ctx.logger?.warn?.(
           `weixin-bridge: reply to ${link.peerId} failed: ${String(error)}`,
