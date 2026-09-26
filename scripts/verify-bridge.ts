@@ -237,8 +237,48 @@ async function main(): Promise<void> {
     await host.dispose();
   }
 
+  // ── 7. a session that cannot be opened falls back to an alternate id ──────
+  {
+    const host = await boot({ enabled: true, dmPolicy: 'open' });
+    const canonical = 'weixin:acct@im.bot:peer-a@im.wechat';
+    // Simulates a live handle held by another DSH instance: resume fails and
+    // create collides with the session already on disk.
+    host.agents.conflicting.add(canonical);
+
+    inbound(host, 'peer-a@im.wechat', 'hi');
+    await tick();
+
+    const fallback = `${canonical}:b`;
+    assert(host.agents.agents.has(fallback), 'a blocked session must fall back to an alternate id');
+    assert(
+      host.agents.agents.get(fallback)?.sent.length === 1,
+      'the message must still reach an agent through the fallback session',
+    );
+    assert(host.weixin.sent.length === 0, 'no error notice when the fallback works');
+    await host.dispose();
+  }
+
+  // ── 8. when no session can be opened the contact is told, not ignored ─────
+  {
+    const host = await boot({ enabled: true, dmPolicy: 'open' });
+    const canonical = 'weixin:acct@im.bot:peer-a@im.wechat';
+    host.agents.conflicting.add(canonical);
+    host.agents.conflicting.add(`${canonical}:b`);
+
+    inbound(host, 'peer-a@im.wechat', 'hi');
+    await tick();
+
+    assert(host.agents.createCalls === 0, 'no agent can be created in this scenario');
+    assert(host.weixin.sent.length === 1, 'the contact must be told the bot could not open the session');
+    assert(
+      host.weixin.sent[0]!.text.includes('无法打开'),
+      'the notice should explain that the session could not be opened',
+    );
+    await host.dispose();
+  }
+
   process.stdout.write(
-    '✅ verify-bridge: routing, reply relay, policy, bursts, and interleaved turns all behave\n',
+    '✅ verify-bridge: routing, reply relay, policy, bursts, interleaved turns, and session fallback all behave\n',
   );
 }
 main().catch((error: unknown) => {

@@ -82,6 +82,12 @@ export class StubAgents extends Service {
   readonly agents = new Map<string, StubAgent>();
   /** Every `create` call, in order, with the options the bridge passed. */
   readonly createOptions: RecordedCreateOptions[] = [];
+  /**
+   * Session ids whose `create` must fail as if the session already exists on
+   * disk — the state a second DSH instance sees when another process still
+   * holds the session's write handle.
+   */
+  readonly conflicting = new Set<string>();
   createCalls = 0;
 
   constructor(ctx: Context) {
@@ -98,6 +104,9 @@ export class StubAgents extends Service {
     meta?: { cwd?: string; agentPreset?: string };
   }): Promise<{ agent: StubAgent; dispose(): Promise<void> }> {
     const id = String(options.sessionId);
+    if (this.conflicting.has(id)) {
+      throw new Error(`SessionAlreadyExistsError: session "${id}" already exists`);
+    }
     this.createOptions.push({
       sessionId: options.sessionId,
       ...(options.agentOptions ? { agentOptions: options.agentOptions } : {}),
@@ -111,7 +120,7 @@ export class StubAgents extends Service {
   }
 
   async resume(): Promise<{ agent: StubAgent; dispose(): Promise<void> }> {
-    throw new Error('stub: no persisted session');
+    throw new Error('SessionAlreadyOwnedError: session is already owned by an active write handle');
   }
 }
 

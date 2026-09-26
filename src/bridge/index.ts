@@ -145,11 +145,11 @@ export function apply(ctx: Context, config: BridgeConfig): void {
    */
   const buffers = new Map<string, string[]>();
   /**
-   * sessionId -> in-flight agent creation. Two messages from the same contact
-   * can arrive before the first agent is published; without this, both would
-   * call `agents.create` and the second would fail on a duplicate id.
+   * canonical session key -> in-flight agent creation. Two messages from the
+   * same contact can arrive before the first agent is published; without this,
+   * both would call `agents.create` and the second would fail on a duplicate id.
    */
-  const pendingAgents = new Map<string, Promise<Agent>>();
+  const pendingAgents = new Map<string, Promise<{ agent: Agent; sessionId: SessionId }>>();
 
   const bufferKey = (sessionId: string, turn: number): string => `${sessionId}#${turn}`;
 
@@ -170,14 +170,31 @@ export function apply(ctx: Context, config: BridgeConfig): void {
     });
   };
 
-  const ensureAgent = (sessionId: SessionId): Promise<Agent> => {
-    const existing = pendingAgents.get(sessionId);
+  /**
+   * Session identities tried for one conversation, in order.
+   *
+   * The first is the stable per-peer id. The second is a fallback used when the
+   * primary session exists on disk but cannot be opened in this process — for
+   * example when another live DSH instance still holds its write handle. Without
+   * it the contact would be stuck forever with no way to reach the bot.
+   */
+  const sessionCandidates = (canonical: string): SessionId[] => [
+    SessionId(canonical),
+    SessionId(`${canonical}:b`),
+  ];
+
+  /**
+   * Resolve the live agent for one conversation, creating or resuming it.
+   *
+   * @param canonical - the stable per-peer session key.
+   * @returns the agent together with the session id actually in use.
+   * @throws when no candidate session could be opened.
+   */
+  const ensureAgent = (canonical: string): Promise<{ agent: Agent; sessionId: SessionId }> => {
+    const existing = pendingAgents.get(canonical);
     if (existing) return existing;
 
-    const inFlight = (async (): Promise<Agent> => {
-      const live = ctx.agents.get(sessionId);
-      if (live) return live;
-
+    const inFlight = (async (): Promise<{ agent: Agent; sessionId: SessionId }> => {
       const agentOptions = resolveAgentOptions(ctx, config);
       if (!agentOptions) {
         ctx.logger?.warn?.(
@@ -185,51 +202,82 @@ export function apply(ctx: Context, config: BridgeConfig): void {
             'unavailable) — the agent will fail its first request',
         );
       }
+      const meta = {
+        cwd: process.cwd(),
+        ...(config.agentPreset ? { agentPreset: config.agentPreset } : {}),
+      };
+      const hasPersistence = Boolean(ctx.get('sessionPersistence'));
+      let lastError: unknown;
 
-      if (ctx.get('sessionPersistence')) {
+      for (const sessionId of sessionCandidates(canonical)) {
+        const live = ctx.agents.get(sessionId);
+        if (live) return { agent: live, sessionId };
+
+        if (hasPersistence) {
+          try {
+            const handle = await ctx.agents.resume({
+              resumeSessionId: sessionId,
+              ...(agentOptions ? { agentOptions } : {}),
+              setup,
+            });
+            return { agent: handle.agent, sessionId };
+          } catch (error) {
+            lastError = error;
+            ctx.logger?.info?.(
+              `weixin-bridge: no resumable session ${sessionId} (${String(error)})`,
+            );
+          }
+        }
+
         try {
-          const handle = await ctx.agents.resume({
-            resumeSessionId: sessionId,
+          const handle = await ctx.agents.create({
+            sessionId,
+            meta,
             ...(agentOptions ? { agentOptions } : {}),
             setup,
           });
-          return handle.agent;
-        } catch {
-          // No persisted session under this id yet — fall through to creation.
+          return { agent: handle.agent, sessionId };
+        } catch (error) {
+          lastError = error;
+          ctx.logger?.warn?.(`weixin-bridge: could not open session ${sessionId}: ${String(error)}`);
         }
       }
-
-      const handle = await ctx.agents.create({
-        sessionId,
-        meta: {
-          cwd: process.cwd(),
-          ...(config.agentPreset ? { agentPreset: config.agentPreset } : {}),
-        },
-        ...(agentOptions ? { agentOptions } : {}),
-        setup,
-      });
-      return handle.agent;
+      throw lastError ?? new Error('weixin-bridge: no session candidate could be opened');
     })();
 
     // A failed creation must not be cached, or the contact could never retry.
     const tracked = inFlight.catch((error: unknown) => {
-      pendingAgents.delete(sessionId);
+      pendingAgents.delete(canonical);
       throw error;
     });
-    pendingAgents.set(sessionId, tracked);
+    pendingAgents.set(canonical, tracked);
     return tracked;
   };
 
   const onInbound = async (message: WeixinInboundMessage): Promise<void> => {
-    if (!isAllowed(message, config)) return;
+    if (!isAllowed(message, config)) {
+      ctx.logger?.info?.(
+        `weixin-bridge: ignoring message from ${message.fromUserId} ` +
+          `(group=${message.groupId ?? 'no'}, dmPolicy=${config.dmPolicy ?? 'open'})`,
+      );
+      return;
+    }
     const text = message.text.trim();
-    if (!text) return; // v0.1 handles text only; media arrives in v0.2.
+    if (!text) {
+      // v0.1 handles text only; media arrives in v0.2.
+      ctx.logger?.info?.(
+        `weixin-bridge: ignoring message from ${message.fromUserId} with no text ` +
+          `(itemTypes=[${message.itemList.map((item) => item.type).join(',')}])`,
+      );
+      return;
+    }
 
-    const sessionId = SessionId(sessionKeyFor(message));
-    links.set(sessionId, { accountId: message.accountId, peerId: message.fromUserId });
+    const canonical = sessionKeyFor(message);
+    const link: PeerLink = { accountId: message.accountId, peerId: message.fromUserId };
 
     try {
-      const agent = await ensureAgent(sessionId);
+      const { agent, sessionId } = await ensureAgent(canonical);
+      links.set(sessionId, link);
       agent.send(
         createUserMessage({
           content: [{ type: 'text', text }],
@@ -246,9 +294,18 @@ export function apply(ctx: Context, config: BridgeConfig): void {
         `weixin-bridge: dispatched message from ${message.fromUserId} to session ${sessionId}`,
       );
     } catch (error) {
-      ctx.logger?.warn?.(
+      // Never drop a contact's message silently: tell them the bot failed.
+      ctx.logger?.error?.(
         `weixin-bridge: failed to dispatch message from ${message.fromUserId}: ${String(error)}`,
       );
+      void ctx.weixin
+        .sendText(
+          link.accountId,
+          link.peerId,
+          '⚠️ 你的消息已收到，但 DSH 侧无法打开这段会话（可能是另一个 DSH 实例仍占用它）。' +
+            '请检查后重试。',
+        )
+        .catch(() => undefined);
     }
   };
 
