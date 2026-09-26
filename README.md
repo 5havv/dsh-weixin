@@ -51,6 +51,12 @@ dsh --profile web --patch ./examples/cordis.dev.yml
 > The iLink backend allows only **one live consumer per token**. Stop any other
 > gateway using the same account first.
 
+## Security
+
+`weixin_send`'s `filePath` is chosen by the model, and inbound messages can influence the model. The plugin reads the file directly, bypassing the harness's own filesystem sandbox, so an unrestricted path would be an exfiltration channel.
+
+Outbound files are therefore confined to `mediaSendRoots` (default: the process working directory plus the media cache). That default is a speed bump, not a wall — **narrow it to a dedicated directory if your account may receive untrusted messages.** Paths are `realpath`-resolved before the check, so symlinks cannot escape, and a sibling directory sharing the prefix (`/a/b` vs `/a/b-evil`) is rejected.
+
 ## Limitations
 
 - Personal WeChat via an iLink bot identity: normal group chats usually receive

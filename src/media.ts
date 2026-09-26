@@ -351,6 +351,41 @@ export function writeMediaCache(params: {
 }
 
 /**
+ * Resolve an outbound file path and confirm it lies inside an allowed root.
+ *
+ * The model chooses this path, and on a chat channel the model's instructions
+ * can be influenced by whoever is messaging the bot. Reading an arbitrary path
+ * would therefore turn `weixin_send` into a file-exfiltration primitive that
+ * bypasses the harness's own filesystem sandbox, so the path is confined to
+ * operator-approved roots and symlinks are resolved before the check.
+ *
+ * @param filePath - caller-supplied path.
+ * @param roots - absolute directories the file must live under.
+ * @returns the canonical path to read.
+ * @throws when the path is outside every root or does not exist.
+ */
+export function resolveSendablePath(filePath: string, roots: readonly string[]): string {
+  const resolved = path.resolve(filePath);
+  let canonical: string;
+  try {
+    canonical = fs.realpathSync(resolved);
+  } catch {
+    throw new Error(`weixin: cannot read ${resolved}`);
+  }
+  const normalizedRoots = roots.map((root) => path.resolve(root));
+  const allowed = normalizedRoots.some(
+    (root) => canonical === root || canonical.startsWith(root + path.sep),
+  );
+  if (!allowed) {
+    throw new Error(
+      `weixin: refusing to send ${canonical} — outside the allowed roots ` +
+        `(${normalizedRoots.join(', ')}). Widen mediaSendRoots to allow it.`,
+    );
+  }
+  return canonical;
+}
+
+/**
  * Encrypt and upload one local file, ready to be referenced by a message item.
  *
  * @param params - file, recipient, and API credentials.

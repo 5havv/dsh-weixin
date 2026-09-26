@@ -29,6 +29,7 @@ import { MessageItemType, UploadMediaType } from '../src/protocol/types.js';
 import {
   fetchInboundMedia,
   materializeInboundMedia,
+  resolveSendablePath,
   uploadOutboundMedia,
   writeMediaCache,
 } from '../src/media.js';
@@ -346,5 +347,56 @@ describe('materializeInboundMedia', () => {
     expect(media).toEqual([]);
     expect(failures).toEqual([]);
     expect(mockedDownload).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveSendablePath', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-roots-'));
+    fs.mkdirSync(path.join(root, 'nested'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'ok.txt'), 'x');
+    fs.writeFileSync(path.join(root, 'nested', 'deep.txt'), 'x');
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('accepts a file inside an allowed root', () => {
+    expect(resolveSendablePath(path.join(root, 'ok.txt'), [root])).toBe(
+      fs.realpathSync(path.join(root, 'ok.txt')),
+    );
+    expect(resolveSendablePath(path.join(root, 'nested', 'deep.txt'), [root])).toBe(
+      fs.realpathSync(path.join(root, 'nested', 'deep.txt')),
+    );
+  });
+
+  it('refuses a file outside every root', () => {
+    expect(() => resolveSendablePath('/etc/hostname', [root])).toThrow(/outside the allowed roots/);
+  });
+
+  it('refuses a sibling directory sharing the root prefix', () => {
+    const sibling = `${root}-evil`;
+    fs.mkdirSync(sibling, { recursive: true });
+    fs.writeFileSync(path.join(sibling, 'secret.txt'), 'x');
+    try {
+      expect(() => resolveSendablePath(path.join(sibling, 'secret.txt'), [root])).toThrow(
+        /outside the allowed roots/,
+      );
+    } finally {
+      fs.rmSync(sibling, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a symlink that escapes the root', () => {
+    const link = path.join(root, 'escape');
+    fs.symlinkSync('/etc/hostname', link);
+    expect(() => resolveSendablePath(link, [root])).toThrow(/outside the allowed roots/);
+  });
+
+  it('reports a missing file rather than silently accepting it', () => {
+    expect(() => resolveSendablePath(path.join(root, 'nope.txt'), [root])).toThrow(/cannot read/);
   });
 });

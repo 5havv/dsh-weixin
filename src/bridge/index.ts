@@ -417,16 +417,19 @@ export function apply(ctx: Context, config: BridgeConfig): void {
     const canonical = sessionKeyFor(message);
     const link: PeerLink = { accountId: message.accountId, peerId: message.fromUserId };
 
-    const content = await buildContent(message);
-    if (content.length === 0) {
-      ctx.logger?.info?.(
-        `weixin-bridge: ignoring empty message from ${message.fromUserId} ` +
-          `(itemTypes=[${message.itemList.map((item) => item.type).join(',')}])`,
-      );
-      return;
-    }
-
     try {
+      // Assembling content reads cached media from disk, so it belongs inside the
+      // failure boundary: a throw here must still reach the contact, not become an
+      // unhandled rejection that leaves them waiting.
+      const content = await buildContent(message);
+      if (content.length === 0) {
+        ctx.logger?.info?.(
+          `weixin-bridge: ignoring empty message from ${message.fromUserId} ` +
+            `(itemTypes=[${message.itemList.map((item) => item.type).join(',')}])`,
+        );
+        return;
+      }
+
       const { agent, sessionId } = await ensureAgent(canonical);
       links.set(sessionId, link);
       agent.send(
@@ -446,16 +449,16 @@ export function apply(ctx: Context, config: BridgeConfig): void {
           `(${content.length} block(s), ${message.media.length} attachment(s))`,
       );
     } catch (error) {
-      // Never drop a contact's message silently: tell them the bot failed.
+      // Never drop a contact's message silently: tell them something went wrong.
       ctx.logger?.error?.(
-        `weixin-bridge: failed to dispatch message from ${message.fromUserId}: ${String(error)}`,
+        `weixin-bridge: failed to handle message from ${message.fromUserId}: ${String(error)}`,
       );
       void ctx.weixin
         .sendText(
           link.accountId,
           link.peerId,
-          '⚠️ 你的消息已收到，但 DSH 侧无法打开这段会话（可能是另一个 DSH 实例仍占用它）。' +
-            '请检查后重试。',
+          '⚠️ 你的消息已收到，但 DSH 侧处理失败（可能是会话无法打开或附件读取失败）。' +
+            '请稍后重试。',
         )
         .catch(() => undefined);
     }

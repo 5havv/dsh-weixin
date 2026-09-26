@@ -40,6 +40,14 @@ export interface Config {
   mediaCacheDir?: string;
   /** Media CDN base URL; empty uses the standard Weixin endpoint. */
   cdnBaseUrl?: string;
+  /**
+   * Directories `weixin_send` may read a file from.
+   *
+   * Empty defaults to the process working directory plus the media cache. The
+   * model chooses the path, so on a channel whose messages may be adversarial
+   * this should be narrowed to a dedicated directory.
+   */
+  mediaSendRoots?: string[];
 }
 
 /** Schemastery schema for {@link Config}. */
@@ -55,4 +63,5 @@ export const Config: Schema<Config> = Schema.object({
   mediaMaxBytes: Schema.number().default(20 * 1024 * 1024),
   mediaCacheDir: Schema.string().default(''),
   cdnBaseUrl: Schema.string().default(''),
+  mediaSendRoots: Schema.array(Schema.string()).default([]),
 });

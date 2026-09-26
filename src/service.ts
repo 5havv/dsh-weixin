@@ -24,6 +24,7 @@ import { Config as ConfigSchema, type Config as WeixinConfig } from './config.js
 import { runMonitor } from './inbound.js';
 import {
   materializeInboundMedia,
+  resolveSendablePath,
   type WeixinMediaAttachment,
   type WeixinMediaFailure,
 } from './media.js';
@@ -134,6 +135,17 @@ export class WeixinService extends Service {
   /** Where decrypted inbound media is cached. */
   get mediaDirectory(): string {
     return this.mediaCacheDir;
+  }
+
+  /**
+   * Directories an outbound file may be read from.
+   *
+   * Defaults to the process working directory plus the media cache; operators
+   * expecting adversarial traffic should narrow it with `mediaSendRoots`.
+   */
+  sendRoots(): string[] {
+    const configured = this.settings.mediaSendRoots?.filter((root) => root.trim() !== '') ?? [];
+    return configured.length > 0 ? configured : [process.cwd(), this.mediaCacheDir];
   }
 
   /** The account used when a caller does not name one. */
@@ -337,13 +349,15 @@ export class WeixinService extends Service {
     if (!account?.token) {
       throw new Error(`weixin: account ${accountId} has no stored token`);
     }
-    const stats = await stat(filePath).catch(() => undefined);
+    // The path comes from the model, so confine it before touching the disk.
+    const target = resolveSendablePath(filePath, this.sendRoots());
+    const stats = await stat(target).catch(() => undefined);
     if (!stats?.isFile()) {
-      throw new Error(`weixin: ${filePath} is not a readable file`);
+      throw new Error(`weixin: ${target} is not a readable file`);
     }
     const maxBytes = this.settings.mediaMaxBytes ?? DEFAULT_MAX_MEDIA_BYTES;
     if (stats.size > maxBytes) {
-      throw new Error(`weixin: ${filePath} is ${stats.size} bytes, over the ${maxBytes}-byte limit`);
+      throw new Error(`weixin: ${target} is ${stats.size} bytes, over the ${maxBytes}-byte limit`);
     }
     return sendMediaToPeer({
       dataDir: this.dataDir,
@@ -354,7 +368,7 @@ export class WeixinService extends Service {
       ...(this.settings.cdnBaseUrl?.trim() ? { cdnBaseUrl: this.settings.cdnBaseUrl.trim() } : {}),
       ...(this.settings.maxMessageLength ? { maxChunkLength: this.settings.maxMessageLength } : {}),
       toUserId,
-      filePath,
+      filePath: target,
       ...(caption ? { caption } : {}),
       onStaleSession: (peerId) => {
         this.ctx.logger?.warn?.(`weixin: stale context token for ${peerId}; resent without it`);
