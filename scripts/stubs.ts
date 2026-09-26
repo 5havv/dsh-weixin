@@ -9,6 +9,10 @@
  * @module @5havv/dsh-weixin/scripts/stubs
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { Context, Service } from '@deepseek-ai/cordis';
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 
@@ -152,9 +156,13 @@ export class StubAgentDefaultModel extends Service {
 /** Stand-in for the Weixin service, recording outbound sends. */
 export class StubWeixin extends Service {
   readonly sent: { accountId: string; toUserId: string; text: string }[] = [];
+  /** Where the bridge persists per-peer session choices. */
+  readonly dataDirectory: string;
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, config?: { dataDir?: string }) {
     super(ctx, 'weixin');
+    this.dataDirectory =
+      config?.dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-stub-'));
   }
 
   async sendText(accountId: string, toUserId: string, text: string): Promise<{ messageIds: string[]; usedTokenlessFallback: boolean }> {

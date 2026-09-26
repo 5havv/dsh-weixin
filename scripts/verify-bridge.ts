@@ -9,6 +9,10 @@
  * @module @5havv/dsh-weixin/scripts/verify-bridge
  */
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { Context } from '@deepseek-ai/cordis';
 
 import { apply as applyBridge } from '../src/bridge/index.js';
@@ -31,6 +35,8 @@ interface Host {
   ctx: Context;
   agents: StubAgents;
   weixin: StubWeixin;
+  /** Channel data directory, where the session-choice memo is written. */
+  dataDir: string;
   dispose(): Promise<void>;
 }
 
@@ -42,14 +48,16 @@ async function boot(
   },
 ): Promise<Host> {
   const ctx = new Context();
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-weixin-boot-'));
   await ctx.plugin(StubTools);
   await ctx.plugin(StubSystemPrompt);
-  await ctx.plugin(StubWeixin);
+  await ctx.plugin(StubWeixin, { dataDir });
   await ctx.plugin(StubAgents);
   await ctx.plugin(StubAgentDefaultModel, defaultModel);
   const fiber = await ctx.plugin({ inject: ['weixin', 'agents'], apply: applyBridge }, bridgeConfig);
   return {
     ctx,
+    dataDir,
     agents: ctx.get('agents') as StubAgents,
     weixin: ctx.get('weixin') as StubWeixin,
     dispose: async () => {
@@ -277,8 +285,28 @@ async function main(): Promise<void> {
     await host.dispose();
   }
 
+  // ── 9. the session a conversation settled on is remembered ────────────────
+  {
+    const host = await boot({ enabled: true, dmPolicy: 'open' });
+    const canonical = 'weixin:acct@im.bot:peer-a@im.wechat';
+    host.agents.conflicting.add(canonical);
+
+    inbound(host, 'peer-a@im.wechat', 'hi');
+    await tick();
+
+    const fallback = `${canonical}:b`;
+    const memo = JSON.parse(
+      fs.readFileSync(path.join(host.dataDir, 'bridge-sessions.json'), 'utf-8'),
+    ) as Record<string, string>;
+    assert(
+      memo[canonical] === fallback,
+      'the chosen session must be persisted so a restart keeps the same conversation',
+    );
+    await host.dispose();
+  }
+
   process.stdout.write(
-    '✅ verify-bridge: routing, reply relay, policy, bursts, interleaved turns, and session fallback all behave\n',
+    '✅ verify-bridge: routing, reply relay, policy, bursts, interleaved turns, session fallback, and continuity all behave\n',
   );
 }
 main().catch((error: unknown) => {

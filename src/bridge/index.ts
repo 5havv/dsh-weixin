@@ -12,6 +12,9 @@
  * @module @5havv/dsh-weixin/bridge
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent';
 import {
@@ -74,6 +77,52 @@ function isAllowed(message: WeixinInboundMessage, config: BridgeConfig): boolean
 /** Structural view of the deployment's default-model service (`ctx.agentDefaultModel`). */
 interface DefaultModelService {
   currentSelection(): { provider: string; model: string; reasoningEffort?: ReasoningEffortId };
+}
+
+/**
+ * Persistent per-peer choice of session id.
+ *
+ * A conversation must keep talking to the same session across restarts. Without
+ * this, a session that is temporarily unavailable (another live DSH instance
+ * holding its write handle) pushes the conversation onto a fallback id, and the
+ * next restart would silently move it back — losing everything said in between
+ * and flip-flopping whenever the handle changes hands.
+ */
+class SessionChoiceStore {
+  private readonly file: string;
+  private cache: Record<string, string> | undefined;
+
+  constructor(dataDir: string) {
+    this.file = path.join(dataDir, 'bridge-sessions.json');
+  }
+
+  /** @returns the session id previously chosen for this conversation, if any. */
+  get(key: string): string | undefined {
+    if (this.cache === undefined) {
+      try {
+        const parsed: unknown = JSON.parse(fs.readFileSync(this.file, 'utf-8'));
+        this.cache =
+          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, string>)
+            : {};
+      } catch {
+        this.cache = {}; // Missing or unreadable: start fresh.
+      }
+    }
+    return this.cache[key];
+  }
+
+  /** Remember the session id actually in use for this conversation. */
+  set(key: string, sessionId: string): void {
+    if (this.get(key) === sessionId) return;
+    this.cache = { ...(this.cache ?? {}), [key]: sessionId };
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      fs.writeFileSync(this.file, `${JSON.stringify(this.cache, null, 2)}\n`, 'utf-8');
+    } catch {
+      // Losing the memo only costs continuity, never delivery.
+    }
+  }
 }
 
 /**
@@ -170,18 +219,25 @@ export function apply(ctx: Context, config: BridgeConfig): void {
     });
   };
 
+  /** Remembers which session each conversation settled on, across restarts. */
+  const sessionChoices = new SessionChoiceStore(ctx.weixin.dataDirectory);
+
   /**
-   * Session identities tried for one conversation, in order.
+   * Session identities to try for one conversation, in order.
    *
-   * The first is the stable per-peer id. The second is a fallback used when the
-   * primary session exists on disk but cannot be opened in this process — for
-   * example when another live DSH instance still holds its write handle. Without
-   * it the contact would be stuck forever with no way to reach the bot.
+   * A previously chosen id comes first so continuity survives restarts. The
+   * stable per-peer id is next, and `'<id>:b'` last: it is the fallback used when
+   * the primary session exists on disk but cannot be opened in this process — for
+   * example when another live DSH instance holds its write handle. Without that
+   * fallback the contact would be stuck forever with no way to reach the bot.
    */
-  const sessionCandidates = (canonical: string): SessionId[] => [
-    SessionId(canonical),
-    SessionId(`${canonical}:b`),
-  ];
+  const sessionCandidates = (canonical: string): SessionId[] => {
+    const remembered = sessionChoices.get(canonical);
+    const ids = [remembered, canonical, `${canonical}:b`].filter(
+      (id): id is string => typeof id === 'string' && id.length > 0,
+    );
+    return [...new Set(ids)].map((id) => SessionId(id));
+  };
 
   /**
    * Resolve the live agent for one conversation, creating or resuming it.
@@ -211,7 +267,10 @@ export function apply(ctx: Context, config: BridgeConfig): void {
 
       for (const sessionId of sessionCandidates(canonical)) {
         const live = ctx.agents.get(sessionId);
-        if (live) return { agent: live, sessionId };
+        if (live) {
+          sessionChoices.set(canonical, sessionId);
+          return { agent: live, sessionId };
+        }
 
         if (hasPersistence) {
           try {
@@ -220,6 +279,7 @@ export function apply(ctx: Context, config: BridgeConfig): void {
               ...(agentOptions ? { agentOptions } : {}),
               setup,
             });
+            sessionChoices.set(canonical, sessionId);
             return { agent: handle.agent, sessionId };
           } catch (error) {
             lastError = error;
@@ -236,6 +296,7 @@ export function apply(ctx: Context, config: BridgeConfig): void {
             ...(agentOptions ? { agentOptions } : {}),
             setup,
           });
+          sessionChoices.set(canonical, sessionId);
           return { agent: handle.agent, sessionId };
         } catch (error) {
           lastError = error;
