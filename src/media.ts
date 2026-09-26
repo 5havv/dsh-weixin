@@ -249,6 +249,11 @@ export async function fetchInboundMedia(params: {
 
   switch (item.type) {
     case MessageItemType.IMAGE: {
+      // Verified against the live CDN: `full_url` is the authoritative download
+      // target. The URL the client would construct from `encrypt_query_param`
+      // answers HTTP 400 for a parameter produced by our own upload (that
+      // parameter targets the WeChat client), so the constructed form is only a
+      // fallback for messages that omit `full_url`.
       const image = item.image_item!;
       const data = await downloadCdnBuffer({
         ...(image.media?.encrypt_query_param
