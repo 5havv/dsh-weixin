@@ -369,12 +369,16 @@ export function apply(ctx: Context, config: BridgeConfig): void {
 
   /** Describe one cached attachment so the agent can open it with its own tools. */
   const describeMedia = (media: WeixinMediaAttachment): string => {
-    const parts = [
-      `[${KIND_LABEL[media.kind]}] 已保存到 ${media.path}（${media.mime}，${(media.size / 1024).toFixed(1)} KB）`,
-    ];
-    if (media.transcript) parts.push(`语音转写：${media.transcript}`);
-    else if (media.kind === 'voice') parts.push('（SILK 编码，未转写）');
-    return parts.join(' ');
+    const size = `${(media.size / 1024).toFixed(1)} KB`;
+    if (media.kind === 'voice' && media.transcript) {
+      // Verified live: the backend does supply voice_item.text. The transcript is
+      // the part the agent can act on, so it leads; the cached audio is provenance.
+      return `[语音] ${media.transcript}（原始 SILK 已缓存到 ${media.path}，${size}）`;
+    }
+    return (
+      `[${KIND_LABEL[media.kind]}] 已保存到 ${media.path}（${media.mime}，${size}）` +
+      (media.kind === 'voice' ? '（SILK 编码，平台未提供转写，内容不可读）' : '')
+    );
   };
 
   /**
