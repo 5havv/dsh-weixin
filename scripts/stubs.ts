@@ -170,7 +170,8 @@ export class StubAttachment extends Service {
   readonly savedImages: { mediaType: string; bytes: number; name?: string }[] = [];
 
   constructor(ctx: Context) {
-    super(ctx, 'attachment');
+    // Registered under the real service key (`ctx.attachments`, plural).
+    super(ctx, 'attachments');
   }
 
   async saveImages(

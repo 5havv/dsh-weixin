@@ -326,7 +326,13 @@ export function apply(ctx: Context, config: BridgeConfig): void {
     video: '视频',
   };
 
-  /** Structural view of the attachment service, which is optional. */
+  /**
+   * Structural view of the attachment service, which is optional.
+   *
+   * The service key is `attachments` (plural) — the module doc of
+   * `@deepseek-ai/dsh-attachment` names it `ctx.attachments`, and a singular
+   * lookup silently resolves to nothing.
+   */
   interface AttachmentLike {
     saveImages(
       inputs: readonly { data: Uint8Array; mediaType: ImageMediaType; name?: string }[],
@@ -342,7 +348,7 @@ export function apply(ctx: Context, config: BridgeConfig): void {
   const attachImage = async (media: WeixinMediaAttachment): Promise<ContentBlock | undefined> => {
     if (!isSupportedImageMime(media.mime)) return undefined;
     const attachment = (ctx as unknown as { get(name: string): unknown }).get(
-      'attachment',
+      'attachments',
     ) as AttachmentLike | undefined;
     if (!attachment?.saveImages) return undefined;
     try {

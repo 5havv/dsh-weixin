@@ -63,7 +63,7 @@ async function boot(
     dataDir,
     agents: ctx.get('agents') as StubAgents,
     weixin: ctx.get('weixin') as StubWeixin,
-    attachment: ctx.get('attachment') as StubAttachment,
+    attachment: ctx.get('attachments') as StubAttachment,
     dispose: async () => {
       await fiber.dispose();
     },
