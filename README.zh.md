@@ -76,11 +76,26 @@ dsh --profile web --patch ./examples/cordis.dev.yml                 # 实际启�
 > 注意 `--dump-config` 只组装配置、**不导入入口模块**，所以它不会暴露这个问题——改完路径务必真正启动一次。
 > 每次改动源码后先 `npm run build`。
 
-正式安装：
+正式安装（三选一）：
 
 ```sh
+# ① npm（推荐，安装的是预构建产物，用户侧无需构建权限）
 dsh plugin --profile web add @5havv/dsh-weixin
+
+# ② 直接从 GitHub 装（本包带自包含的 prepare 脚本，会在安装时构建）
+dsh plugin --profile web add github:5havv/dsh-weixin
+
+# ③ 本地 tarball（不需要任何构建授权）
+pnpm pack && dsh plugin --profile web add ./5havv-dsh-weixin-0.1.0.tgz
 ```
+
+> **关于方式 ②**：git 安装拉的是**源码**，由本包的 `prepare` 脚本（`tsc -p tsconfig.build.json`）在安装时构建出 `lib/`。
+> pnpm ≥10 默认拒绝运行 git 依赖的构建脚本，首次 `add` 会失败并提示你授权——把 pnpm 打印出的包键加进该 profile 的 `pnpm-workspace.yaml`：
+> ```yaml
+> allowBuilds:
+>   '@5havv/dsh-weixin': true
+> ```
+> 请把这视为**允许该包在安装时于你机器上执行代码**，只对可信来源授权，并尽量锁定 commit：`github:5havv/dsh-weixin#<sha>`。
 
 或者，不改动 profile 依赖、直接改它的 patch 层（**实测支持热加载，无需重启**）：
 

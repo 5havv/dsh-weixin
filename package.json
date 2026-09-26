@@ -46,6 +46,7 @@
     "README.zh.md"
   ],
   "scripts": {
+    "prepare": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",

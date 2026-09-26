@@ -24,6 +24,23 @@ One npm package, two independently enableable Cordis plugins:
 | `@5havv/dsh-weixin` | Channel service: owns `ctx.weixin`, the iLink protocol, and the `weixin_send` tool. |
 | `@5havv/dsh-weixin/bridge` | Relay: WeChat message → agent → reply. |
 
+## Install
+
+```sh
+# ① npm (prebuilt — no build permission needed on the consumer side)
+dsh plugin --profile web add @5havv/dsh-weixin
+
+# ② straight from GitHub (the package ships a self-contained prepare script)
+dsh plugin --profile web add github:5havv/dsh-weixin
+```
+
+> A git install fetches **source**, which this package builds through its
+> `prepare` script. pnpm >= 10 refuses to run a git dependency's build script
+> until you allow it: copy the package key pnpm prints into that profile's
+> `pnpm-workspace.yaml` under `allowBuilds`. Treat that as permission for the
+> package to execute code on your machine at install time, and pin a commit
+> (`github:5havv/dsh-weixin#<sha>`) when you can.
+
 ## Quick start
 
 ```sh
