@@ -5,6 +5,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildItemMessage,
+  buildMediaItem,
   buildTextMessage,
   chunkText,
   extractText,
@@ -101,5 +103,52 @@ describe('isBotMessage', () => {
     expect(isBotMessage({ message_type: MessageType.BOT })).toBe(true);
     expect(isBotMessage({ message_type: MessageType.USER })).toBe(false);
     expect(isBotMessage({})).toBe(false);
+  });
+});
+
+describe('buildMediaItem', () => {
+  const uploaded = {
+    mediaType: 1 as const,
+    downloadEncryptedQueryParam: 'param-1',
+    aeskeyHex: 'a'.repeat(32),
+    fileSize: 100,
+    fileSizeCiphertext: 112,
+  };
+
+  it('builds an image item with the key base64-encoded over its hex form', () => {
+    const item = buildMediaItem(uploaded);
+    expect(item.type).toBe(MessageItemType.IMAGE);
+    expect(item.image_item?.media?.encrypt_query_param).toBe('param-1');
+    expect(item.image_item?.media?.aes_key).toBe(Buffer.from('a'.repeat(32)).toString('base64'));
+    expect(item.image_item?.media?.encrypt_type).toBe(1);
+    expect(item.image_item?.mid_size).toBe(112);
+  });
+
+  it('builds a video item sized by the ciphertext', () => {
+    const item = buildMediaItem({ ...uploaded, mediaType: 2 });
+    expect(item.type).toBe(MessageItemType.VIDEO);
+    expect(item.video_item?.video_size).toBe(112);
+  });
+
+  it('builds a file item carrying its name and plaintext length', () => {
+    const item = buildMediaItem({ ...uploaded, mediaType: 3 }, 'report.pdf');
+    expect(item.type).toBe(MessageItemType.FILE);
+    expect(item.file_item?.file_name).toBe('report.pdf');
+    expect(item.file_item?.len).toBe('100');
+    expect(item.file_item?.media?.encrypt_query_param).toBe('param-1');
+  });
+});
+
+describe('buildItemMessage', () => {
+  it('wraps exactly one item with a fresh client id', () => {
+    const message = buildItemMessage('peer@im.wechat', { type: MessageItemType.IMAGE }, 'ctx');
+    expect(message.to_user_id).toBe('peer@im.wechat');
+    expect(message.item_list).toHaveLength(1);
+    expect(message.client_id).toMatch(/^dsh-weixin:/);
+    expect(message.context_token).toBe('ctx');
+  });
+
+  it('omits context_token when none is available', () => {
+    expect(buildItemMessage('peer@im.wechat', { type: 1 }).context_token).toBeUndefined();
   });
 });

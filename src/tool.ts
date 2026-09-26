@@ -30,7 +30,8 @@ export function applyWeixinSendTool(
     name: 'tool:weixin_send',
     order: 120,
     text:
-      'Use the weixin_send tool to push a text message to a WeChat contact. ' +
+      'Use the weixin_send tool to push a message to a WeChat contact, optionally with a ' +
+      'local file attached (images, video, and documents are supported). ' +
       'It only reaches contacts that have already messaged this bot; replies to an ' +
       'inbound WeChat message are sent automatically and do not need this tool.',
   });
@@ -39,7 +40,8 @@ export function applyWeixinSendTool(
     defineTool({
       name: 'weixin_send',
       description:
-        'Send a text message to a WeChat contact through a connected Weixin account. ' +
+        'Send a message to a WeChat contact through a connected Weixin account. ' +
+        'Pass filePath to attach a local file (sent as an image, video, or document by its type). ' +
         'Use it for proactive messages; ordinary replies to a WeChat conversation are automatic.',
       parameters: {
         toUserId: {
@@ -49,8 +51,13 @@ export function applyWeixinSendTool(
         },
         text: {
           type: 'string',
-          required: true,
-          description: 'Message text. Long text is chunked automatically.',
+          description:
+            'Message text. Long text is chunked automatically. When filePath is given this ' +
+            'becomes the caption sent before the file.',
+        },
+        filePath: {
+          type: 'string',
+          description: 'Absolute path of a local file to attach (max 20 MiB by default).',
         },
         accountId: {
           type: 'string',
@@ -70,14 +77,15 @@ export function applyWeixinSendTool(
               items: { type: 'string' },
             },
             usedTokenlessFallback: { type: 'boolean', required: true },
+            kind: { type: 'string', required: true },
           },
         },
         render: (_args, value) => [
           {
             type: 'text',
             text:
-              `Sent ${value.messageIds.length} message(s) to ${value.toUserId} ` +
-              `via ${value.accountId}.` +
+              `Sent ${value.messageIds.length} ${value.kind === 'media' ? 'media ' : ''}message(s) ` +
+              `to ${value.toUserId} via ${value.accountId}.` +
               (value.usedTokenlessFallback ? ' (delivered without a conversation token)' : ''),
           },
         ],
@@ -90,12 +98,23 @@ export function applyWeixinSendTool(
             'weixin_send: no account available; configure one under the weixin plugin first.',
           );
         }
-        const result = await service.sendText(accountId, args.toUserId, args.text);
+        const text = args.text?.trim() ?? '';
+        const filePath = args.filePath?.trim();
+
+        if (!text && !filePath) {
+          throw new Error('weixin_send: pass text, filePath, or both.');
+        }
+
+        const result = filePath
+          ? await service.sendMedia(accountId, args.toUserId, filePath, text || undefined)
+          : await service.sendText(accountId, args.toUserId, text);
+
         return {
           accountId,
           toUserId: args.toUserId,
           messageIds: result.messageIds.filter((id) => id !== ''),
           usedTokenlessFallback: result.usedTokenlessFallback,
+          kind: filePath ? 'media' : 'text',
         };
       },
     }),

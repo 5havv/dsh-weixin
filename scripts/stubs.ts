@@ -54,9 +54,16 @@ export class StubSystemPrompt extends Service {
   }
 }
 
+/** One content block handed to a stubbed agent. */
+export interface SentBlock {
+  type: string;
+  text?: string;
+  attachment?: unknown;
+}
+
 /** One message handed to a stubbed agent. */
 export interface SentMessage {
-  content: { type: string; text?: string }[];
+  content: SentBlock[];
   source: { kind: string; [key: string]: unknown };
   target: string;
   wakeup: boolean;
@@ -150,6 +157,33 @@ export class StubAgentDefaultModel extends Service {
 
   currentSelection(): { provider: string; model: string; reasoningEffort?: unknown } {
     return this.selection;
+  }
+}
+
+/**
+ * Stand-in for the DSH attachment service.
+ *
+ * Records what was stored so integration checks can assert that an inbound
+ * image became a durable reference rather than only a path.
+ */
+export class StubAttachment extends Service {
+  readonly savedImages: { mediaType: string; bytes: number; name?: string }[] = [];
+
+  constructor(ctx: Context) {
+    super(ctx, 'attachment');
+  }
+
+  async saveImages(
+    inputs: readonly { data: Uint8Array; mediaType: string; name?: string }[],
+  ): Promise<readonly { id: string }[]> {
+    return inputs.map((input, index) => {
+      this.savedImages.push({
+        mediaType: input.mediaType,
+        bytes: input.data.length,
+        ...(input.name ? { name: input.name } : {}),
+      });
+      return { id: `att-${index + 1}` };
+    });
   }
 }
 

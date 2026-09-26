@@ -28,6 +28,18 @@ export interface Config {
   toolEnabled?: boolean;
   /** Per-message character budget when chunking outbound text. */
   maxMessageLength?: number;
+  /** Download and decrypt inbound media (images, files, voice, video). */
+  mediaEnabled?: boolean;
+  /** Byte ceiling for one inbound or outbound media file. */
+  mediaMaxBytes?: number;
+  /**
+   * Where decrypted inbound media is cached. Empty means `<dataDir>/media`.
+   * Decrypted bytes are written here so the agent can open them with its own
+   * file tools.
+   */
+  mediaCacheDir?: string;
+  /** Media CDN base URL; empty uses the standard Weixin endpoint. */
+  cdnBaseUrl?: string;
 }
 
 /** Schemastery schema for {@link Config}. */
@@ -39,4 +51,8 @@ export const Config: Schema<Config> = Schema.object({
   botAgent: Schema.string().default('dsh-weixin'),
   toolEnabled: Schema.boolean().default(true),
   maxMessageLength: Schema.number().default(4_000),
+  mediaEnabled: Schema.boolean().default(true),
+  mediaMaxBytes: Schema.number().default(20 * 1024 * 1024),
+  mediaCacheDir: Schema.string().default(''),
+  cdnBaseUrl: Schema.string().default(''),
 });

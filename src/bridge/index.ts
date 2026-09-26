@@ -13,6 +13,7 @@
  */
 
 import fs from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { Context } from '@deepseek-ai/cordis';
@@ -20,11 +21,13 @@ import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent';
 import {
   createUserMessage,
   type AssistantMessage,
+  type ContentBlock,
   type ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm';
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session';
 
-import type { WeixinInboundMessage } from '../service.js';
+import { isSupportedImageMime, type ImageMediaType } from '../media.js';
+import type { WeixinInboundMessage, WeixinMediaAttachment } from '../service.js';
 import { Config as BridgeConfigSchema, type BridgeConfig } from './config.js';
 
 export const name = 'weixin-bridge';
@@ -315,6 +318,94 @@ export function apply(ctx: Context, config: BridgeConfig): void {
     return tracked;
   };
 
+  /** Localized label for one attachment kind, used in the agent-facing note. */
+  const KIND_LABEL: Record<WeixinMediaAttachment['kind'], string> = {
+    image: '图片',
+    file: '文件',
+    voice: '语音',
+    video: '视频',
+  };
+
+  /** Structural view of the attachment service, which is optional. */
+  interface AttachmentLike {
+    saveImages(
+      inputs: readonly { data: Uint8Array; mediaType: ImageMediaType; name?: string }[],
+    ): Promise<readonly unknown[]>;
+  }
+
+  /**
+   * Store one inbound image as an attachment block.
+   *
+   * @param media - the cached image.
+   * @returns the image block, or undefined when the service is absent or refuses.
+   */
+  const attachImage = async (media: WeixinMediaAttachment): Promise<ContentBlock | undefined> => {
+    if (!isSupportedImageMime(media.mime)) return undefined;
+    const attachment = (ctx as unknown as { get(name: string): unknown }).get(
+      'attachment',
+    ) as AttachmentLike | undefined;
+    if (!attachment?.saveImages) return undefined;
+    try {
+      const data = await readFile(media.path);
+      const [ref] = await attachment.saveImages([
+        { data, mediaType: media.mime, name: media.name },
+      ]);
+      // The block type is declared in @deepseek-ai/dsh-attachment, which this
+      // plugin does not depend on; the runtime shape is the service's own ref.
+      return ref ? ({ type: 'image', attachment: ref } as unknown as ContentBlock) : undefined;
+    } catch (error) {
+      ctx.logger?.warn?.(
+        `weixin-bridge: could not attach image ${media.name}: ${String(error)}`,
+      );
+      return undefined;
+    }
+  };
+
+  /** Describe one cached attachment so the agent can open it with its own tools. */
+  const describeMedia = (media: WeixinMediaAttachment): string => {
+    const parts = [
+      `[${KIND_LABEL[media.kind]}] 已保存到 ${media.path}（${media.mime}，${(media.size / 1024).toFixed(1)} KB）`,
+    ];
+    if (media.transcript) parts.push(`语音转写：${media.transcript}`);
+    else if (media.kind === 'voice') parts.push('（SILK 编码，未转写）');
+    return parts.join(' ');
+  };
+
+  /**
+   * Assemble the model-facing content for one inbound message.
+   *
+   * Images become attachment blocks when the service is available so a vision
+   * model can see them; everything else is described by path so the agent can
+   * open it with its own file tools.
+   *
+   * @param message - the normalized inbound message.
+   * @returns the content blocks, empty when the message carries nothing usable.
+   */
+  const buildContent = async (message: WeixinInboundMessage): Promise<ContentBlock[]> => {
+    const blocks: ContentBlock[] = [];
+    const notes: string[] = [];
+
+    const text = message.text.trim();
+    if (text) blocks.push({ type: 'text', text });
+
+    for (const media of message.media) {
+      if (media.kind === 'image' && config.attachImages !== false) {
+        const image = await attachImage(media);
+        if (image) {
+          blocks.push(image);
+          continue;
+        }
+      }
+      notes.push(describeMedia(media));
+    }
+    for (const failure of message.mediaFailures) {
+      notes.push(`（一个${KIND_LABEL[failure.kind]}附件未能获取：${failure.reason}）`);
+    }
+    if (notes.length > 0) blocks.push({ type: 'text', text: notes.join('\n') });
+
+    return blocks;
+  };
+
   const onInbound = async (message: WeixinInboundMessage): Promise<void> => {
     if (!isAllowed(message, config)) {
       ctx.logger?.info?.(
@@ -323,25 +414,24 @@ export function apply(ctx: Context, config: BridgeConfig): void {
       );
       return;
     }
-    const text = message.text.trim();
-    if (!text) {
-      // v0.1 handles text only; media arrives in v0.2.
+    const canonical = sessionKeyFor(message);
+    const link: PeerLink = { accountId: message.accountId, peerId: message.fromUserId };
+
+    const content = await buildContent(message);
+    if (content.length === 0) {
       ctx.logger?.info?.(
-        `weixin-bridge: ignoring message from ${message.fromUserId} with no text ` +
+        `weixin-bridge: ignoring empty message from ${message.fromUserId} ` +
           `(itemTypes=[${message.itemList.map((item) => item.type).join(',')}])`,
       );
       return;
     }
-
-    const canonical = sessionKeyFor(message);
-    const link: PeerLink = { accountId: message.accountId, peerId: message.fromUserId };
 
     try {
       const { agent, sessionId } = await ensureAgent(canonical);
       links.set(sessionId, link);
       agent.send(
         createUserMessage({
-          content: [{ type: 'text', text }],
+          content,
           source: {
             kind: 'weixin',
             accountId: message.accountId,
@@ -352,7 +442,8 @@ export function apply(ctx: Context, config: BridgeConfig): void {
         true,
       );
       ctx.logger?.info?.(
-        `weixin-bridge: dispatched message from ${message.fromUserId} to session ${sessionId}`,
+        `weixin-bridge: dispatched message from ${message.fromUserId} to session ${sessionId} ` +
+          `(${content.length} block(s), ${message.media.length} attachment(s))`,
       );
     } catch (error) {
       // Never drop a contact's message silently: tell them the bot failed.

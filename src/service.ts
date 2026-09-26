@@ -9,6 +9,9 @@
  * @module @5havv/dsh-weixin/service
  */
 
+import { stat } from 'node:fs/promises';
+import path from 'node:path';
+
 import { Service, type Context } from '@deepseek-ai/cordis';
 
 import {
@@ -19,10 +22,43 @@ import {
 } from './auth/accounts.js';
 import { Config as ConfigSchema, type Config as WeixinConfig } from './config.js';
 import { runMonitor } from './inbound.js';
+import {
+  fetchInboundMedia,
+  hasMedia,
+  mediaCacheName,
+  mediaKindOfItem,
+  writeMediaCache,
+} from './media.js';
 import { extractText } from './message.js';
-import { sendTextToPeer, type SendTextResult } from './outbound.js';
+import {
+  DEFAULT_MAX_MEDIA_BYTES,
+  sendMediaToPeer,
+  sendTextToPeer,
+  type SendTextResult,
+} from './outbound.js';
+import { CDN_BASE_URL } from './protocol/cdn.js';
 import type { MessageItem } from './protocol/types.js';
 import { applyWeixinSendTool } from './tool.js';
+
+/** One decrypted inbound media file, cached on disk for the agent to open. */
+export interface WeixinMediaAttachment {
+  kind: 'image' | 'file' | 'voice' | 'video';
+  mime: string;
+  /** Display name of the cached file. */
+  name: string;
+  /** Absolute path of the cached decrypted file. */
+  path: string;
+  /** Decrypted size in bytes. */
+  size: number;
+  /** Platform-provided speech-to-text, for voice messages. */
+  transcript?: string;
+}
+
+/** A media item that could not be retrieved. */
+export interface WeixinMediaFailure {
+  kind: 'image' | 'file' | 'voice' | 'video';
+  reason: string;
+}
 
 /** A normalized inbound WeChat message handed to consumers. */
 export interface WeixinInboundMessage {
@@ -36,6 +72,10 @@ export interface WeixinInboundMessage {
   text: string;
   /** Raw item list, so consumers can detect media or quotes. */
   itemList: MessageItem[];
+  /** Decrypted media cached on disk; empty for text-only messages. */
+  media: WeixinMediaAttachment[];
+  /** Media items that failed to download or decrypt. */
+  mediaFailures: WeixinMediaFailure[];
   /** Conversation token required to reply; stored automatically. */
   contextToken?: string;
   /** Present when the message came from a group chat. */
@@ -81,6 +121,8 @@ export class WeixinService extends Service {
 
   private readonly settings: WeixinConfig;
   private readonly dataDir: string;
+  private readonly mediaCacheDir: string;
+  private readonly cdnBaseUrl: string;
   private readonly monitors = new Map<string, RunningMonitor>();
   private readonly handlers = new Set<(message: WeixinInboundMessage) => void>();
 
@@ -88,6 +130,8 @@ export class WeixinService extends Service {
     super(ctx, 'weixin');
     this.settings = config;
     this.dataDir = resolveDataDir(config.dataDir);
+    this.mediaCacheDir = config.mediaCacheDir?.trim() || path.join(this.dataDir, 'media');
+    this.cdnBaseUrl = config.cdnBaseUrl?.trim() || CDN_BASE_URL;
 
     if (config.toolEnabled !== false) {
       applyWeixinSendTool(ctx, this, config.accounts?.[0]);
@@ -105,6 +149,11 @@ export class WeixinService extends Service {
   /** The resolved data directory backing this service. */
   get dataDirectory(): string {
     return this.dataDir;
+  }
+
+  /** Where decrypted inbound media is cached. */
+  get mediaDirectory(): string {
+    return this.mediaCacheDir;
   }
 
   /** The account used when a caller does not name one. */
@@ -128,8 +177,7 @@ export class WeixinService extends Service {
 
   /** Whether an inbound long poll is currently running for one account. */
   isConnected(accountId: string): boolean {
-    return this.monitors.has(accountId);
-  }
+    return this.monitors.has(accountId);  }
 
   /** Connect every configured account (or all stored ones when none is named). */
   async connectAll(): Promise<void> {
@@ -170,7 +218,7 @@ export class WeixinService extends Service {
       ...(this.settings.pollTimeoutMs ? { longPollTimeoutMs: this.settings.pollTimeoutMs } : {}),
       dataDir: this.dataDir,
       signal: controller.signal,
-      onEvent: (event) => {
+      onEvent: async (event) => {
         switch (event.type) {
           case 'started':
             this.ctx.emit('weixin/connected', { accountId });
@@ -180,6 +228,10 @@ export class WeixinService extends Service {
             const fromUserId = incoming.from_user_id ?? '';
             // The context token is already persisted by the inbound loop.
             const contextToken = incoming.context_token?.trim();
+            const { media, mediaFailures } = await this.materializeMedia(
+              accountId,
+              incoming.item_list ?? [],
+            );
             const payload: WeixinInboundMessage = {
               accountId,
               fromUserId,
@@ -187,6 +239,8 @@ export class WeixinService extends Service {
               createdAt: incoming.create_time_ms ?? Date.now(),
               text: extractText(incoming.item_list),
               itemList: incoming.item_list ?? [],
+              media,
+              mediaFailures,
               ...(contextToken ? { contextToken } : {}),
               ...(incoming.group_id ? { groupId: incoming.group_id } : {}),
             };
@@ -250,6 +304,102 @@ export class WeixinService extends Service {
       ...(this.settings.maxMessageLength ? { maxChunkLength: this.settings.maxMessageLength } : {}),
       toUserId,
       text,
+      onStaleSession: (peerId) => {
+        this.ctx.logger?.warn?.(`weixin: stale context token for ${peerId}; resent without it`);
+      },
+    });
+  }
+
+  /**
+   * Download, decrypt, and cache every media item in one inbound message.
+   *
+   * A failure on one item never discards the message: it is reported through
+   * `mediaFailures` so the consumer can tell the contact what went wrong.
+   *
+   * @param accountId - receiving account (labels cache subdirectories).
+   * @param itemList - the message's items.
+   * @returns the cached attachments and the failures, in item order.
+   */
+  private async materializeMedia(
+    accountId: string,
+    itemList: MessageItem[],
+  ): Promise<{ media: WeixinMediaAttachment[]; mediaFailures: WeixinMediaFailure[] }> {
+    const media: WeixinMediaAttachment[] = [];
+    const mediaFailures: WeixinMediaFailure[] = [];
+    if (this.settings.mediaEnabled === false) return { media, mediaFailures };
+
+    for (const item of itemList) {
+      if (!hasMedia(item)) continue;
+      const label = `weixin[${accountId}]`;
+      try {
+        const fetched = await fetchInboundMedia({
+          item,
+          cdnBaseUrl: this.cdnBaseUrl,
+          maxBytes: this.settings.mediaMaxBytes ?? DEFAULT_MAX_MEDIA_BYTES,
+          label,
+        });
+        if (!fetched) continue;
+        const fileName = mediaCacheName(fetched.name, fetched.mime, `.${fetched.kind}`);
+        const filePath = writeMediaCache({
+          cacheDir: path.join(this.mediaCacheDir, accountId.replace(/[^\w.@-]/g, '_')),
+          name: fileName,
+          data: fetched.data,
+        });
+        media.push({
+          kind: fetched.kind,
+          mime: fetched.mime,
+          name: fileName,
+          path: filePath,
+          size: fetched.data.length,
+          ...(fetched.transcript ? { transcript: fetched.transcript } : {}),
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.ctx.logger?.warn?.(`weixin: inbound media failed (${label}): ${reason}`);
+        mediaFailures.push({ kind: mediaKindOfItem(item), reason });
+      }
+    }
+    return { media, mediaFailures };
+  }
+
+  /**
+   * Upload a local file to the Weixin CDN and send it to a peer.
+   *
+   * @param accountId - sending account.
+   * @param toUserId - target peer id.
+   * @param filePath - absolute path of the file to send.
+   * @param caption - optional text sent before the file.
+   * @returns the assigned message ids.
+   */
+  async sendMedia(
+    accountId: string,
+    toUserId: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<SendTextResult> {
+    const account = loadAccount(this.dataDir, accountId);
+    if (!account?.token) {
+      throw new Error(`weixin: account ${accountId} has no stored token`);
+    }
+    const stats = await stat(filePath).catch(() => undefined);
+    if (!stats?.isFile()) {
+      throw new Error(`weixin: ${filePath} is not a readable file`);
+    }
+    const maxBytes = this.settings.mediaMaxBytes ?? DEFAULT_MAX_MEDIA_BYTES;
+    if (stats.size > maxBytes) {
+      throw new Error(`weixin: ${filePath} is ${stats.size} bytes, over the ${maxBytes}-byte limit`);
+    }
+    return sendMediaToPeer({
+      dataDir: this.dataDir,
+      accountId,
+      baseUrl: account.base_url?.trim() || DEFAULT_BASE_URL,
+      token: account.token,
+      ...(this.settings.botAgent ? { botAgent: this.settings.botAgent } : {}),
+      ...(this.settings.cdnBaseUrl?.trim() ? { cdnBaseUrl: this.settings.cdnBaseUrl.trim() } : {}),
+      ...(this.settings.maxMessageLength ? { maxChunkLength: this.settings.maxMessageLength } : {}),
+      toUserId,
+      filePath,
+      ...(caption ? { caption } : {}),
       onStaleSession: (peerId) => {
         this.ctx.logger?.warn?.(`weixin: stale context token for ${peerId}; resent without it`);
       },

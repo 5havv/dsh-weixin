@@ -19,6 +19,7 @@ import { apply as applyBridge } from '../src/bridge/index.js';
 import {
   StubAgentDefaultModel,
   StubAgents,
+  StubAttachment,
   StubSystemPrompt,
   StubTools,
   StubWeixin,
@@ -35,6 +36,7 @@ interface Host {
   ctx: Context;
   agents: StubAgents;
   weixin: StubWeixin;
+  attachment: StubAttachment;
   /** Channel data directory, where the session-choice memo is written. */
   dataDir: string;
   dispose(): Promise<void>;
@@ -54,12 +56,14 @@ async function boot(
   await ctx.plugin(StubWeixin, { dataDir });
   await ctx.plugin(StubAgents);
   await ctx.plugin(StubAgentDefaultModel, defaultModel);
+  await ctx.plugin(StubAttachment);
   const fiber = await ctx.plugin({ inject: ['weixin', 'agents'], apply: applyBridge }, bridgeConfig);
   return {
     ctx,
     dataDir,
     agents: ctx.get('agents') as StubAgents,
     weixin: ctx.get('weixin') as StubWeixin,
+    attachment: ctx.get('attachment') as StubAttachment,
     dispose: async () => {
       await fiber.dispose();
     },
@@ -67,13 +71,22 @@ async function boot(
 }
 
 /** Emit one inbound WeChat message through the channel service's event. */
-function inbound(host: Host, fromUserId: string, text: string, accountId = 'acct@im.bot'): void {
+function inbound(
+  host: Host,
+  fromUserId: string,
+  text: string,
+  accountId = 'acct@im.bot',
+  media: unknown[] = [],
+  mediaFailures: unknown[] = [],
+): void {
   host.ctx.emit('weixin/message', {
     accountId,
     fromUserId,
     createdAt: Date.now(),
     text,
-    itemList: [{ type: 1, text_item: { text } }],
+    itemList: text ? [{ type: 1, text_item: { text } }] : [{ type: 2, image_item: {} }],
+    media,
+    mediaFailures,
     contextToken: 'ctx-token',
   });
 }
@@ -178,16 +191,11 @@ async function main(): Promise<void> {
     await host.dispose();
   }
   {
+    // A message with neither text nor a retrieved attachment has nothing to say.
     const host = await boot({ enabled: true, dmPolicy: 'open' });
-    host.ctx.emit('weixin/message', {
-      accountId: 'acct@im.bot',
-      fromUserId: 'peer-a@im.wechat',
-      createdAt: Date.now(),
-      text: '',
-      itemList: [{ type: 2, image_item: {} }],
-    });
+    inbound(host, 'peer-a@im.wechat', '');
     await tick();
-    assert(host.agents.createCalls === 0, 'a media-only message is out of v0.1 scope');
+    assert(host.agents.createCalls === 0, 'an empty message must not open a turn');
     await host.dispose();
   }
 
@@ -305,8 +313,68 @@ async function main(): Promise<void> {
     await host.dispose();
   }
 
+  // ── 10. an inbound image becomes an attachment block ──────────────────────
+  {
+    const host = await boot({ enabled: true, dmPolicy: 'open', attachImages: true });
+    const imagePath = path.join(host.dataDir, 'photo.png');
+    fs.writeFileSync(
+      imagePath,
+      Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.from([1, 2, 3]),
+      ]),
+    );
+
+    inbound(host, 'peer-a@im.wechat', '', 'acct@im.bot', [
+      { kind: 'image', mime: 'image/png', name: 'photo.png', path: imagePath, size: 11 },
+    ]);
+    await tick();
+
+    const blocks =
+      host.agents.agents.get('weixin:acct@im.bot:peer-a@im.wechat')?.sent[0]?.content ?? [];
+    assert(
+      blocks.some((block) => block.type === 'image'),
+      'an image must arrive as an attachment block, not just a path',
+    );
+    assert(host.attachment.savedImages.length === 1, 'the image must be stored exactly once');
+    assert(
+      host.attachment.savedImages[0]?.mediaType === 'image/png',
+      'the detected image type must be used',
+    );
+    await host.dispose();
+  }
+
+  // ── 11. media the agent cannot see is described by path, failures included ─
+  {
+    const host = await boot({ enabled: true, dmPolicy: 'open', attachImages: false });
+    const filePath = path.join(host.dataDir, 'report.pdf');
+    fs.writeFileSync(filePath, Buffer.from('%PDF-1.4'));
+
+    inbound(
+      host,
+      'peer-a@im.wechat',
+      'see attached',
+      'acct@im.bot',
+      [{ kind: 'file', mime: 'application/pdf', name: 'report.pdf', path: filePath, size: 8 }],
+      [{ kind: 'image', reason: 'CDN download HTTP 403' }],
+    );
+    await tick();
+
+    const blocks =
+      host.agents.agents.get('weixin:acct@im.bot:peer-a@im.wechat')?.sent[0]?.content ?? [];
+    const note = blocks
+      .filter((block) => block.type === 'text')
+      .map((block) => block.text ?? '')
+      .join('\n');
+    assert(note.includes('see attached'), 'the message text must survive alongside media');
+    assert(note.includes(filePath), 'the cached file path must reach the agent');
+    assert(note.includes('CDN download HTTP 403'), 'a failed attachment must be reported');
+    assert(host.attachment.savedImages.length === 0, 'no image block when attachImages is off');
+    await host.dispose();
+  }
+
   process.stdout.write(
-    '✅ verify-bridge: routing, reply relay, policy, bursts, interleaved turns, session fallback, and continuity all behave\n',
+    '✅ verify-bridge: routing, relay, policy, bursts, turns, session fallback, continuity, and media all behave\n',
   );
 }
 main().catch((error: unknown) => {

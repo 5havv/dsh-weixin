@@ -15,9 +15,33 @@ export {
   WeixinService,
   type WeixinInboundMessage,
   type WeixinAccountStatus,
+  type WeixinMediaAttachment,
+  type WeixinMediaFailure,
 } from './service.js';
 export { Config } from './config.js';
-export { sendTextToPeer, SessionNotReadyError, type SendTextResult } from './outbound.js';
+export {
+  DEFAULT_MAX_MEDIA_BYTES,
+  sendMediaToPeer,
+  sendTextToPeer,
+  SessionNotReadyError,
+  type SendMediaOptions,
+  type SendTextResult,
+} from './outbound.js';
+export {
+  fetchInboundMedia,
+  mimeFromFilename,
+  sniffImageMime,
+  uploadOutboundMedia,
+  writeMediaCache,
+  type InboundMedia,
+  type UploadedMedia,
+} from './media.js';
+export {
+  CDN_BASE_URL,
+  decryptAesEcb,
+  encryptAesEcb,
+  parseAesKey,
+} from './protocol/cdn.js';
 export {
   listAccountIds,
   loadAccount,

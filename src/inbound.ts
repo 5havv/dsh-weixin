@@ -55,7 +55,11 @@ export interface MonitorOptions {
   signal?: AbortSignal;
   /** Overrides the long-poll budget; the server may suggest a new value. */
   longPollTimeoutMs?: number;
-  onEvent?: (event: MonitorEvent) => void;
+  /**
+   * Consumer callback. May be async: the loop awaits it before polling again,
+   * so message order is preserved even when handling downloads media.
+   */
+  onEvent?: (event: MonitorEvent) => void | Promise<void>;
 }
 
 /** Tracks recently seen message ids to suppress duplicate poll deliveries. */
@@ -87,13 +91,15 @@ export class Dedup {
  * @param opts - account identity, credentials, and message callback.
  */
 export async function runMonitor(opts: MonitorOptions): Promise<void> {
-  const emit = opts.onEvent ?? ((): void => {});
+  const emit = async (event: MonitorEvent): Promise<void> => {
+    await opts.onEvent?.(event);
+  };
   let lock: AccountLock | undefined;
 
   try {
     lock = acquireAccountLock(opts.dataDir, opts.accountId);
   } catch (error) {
-    emit({ type: 'error', error, consecutiveFailures: 0 });
+    await emit({ type: 'error', error, consecutiveFailures: 0 });
     return;
   }
 
@@ -108,7 +114,7 @@ export async function runMonitor(opts: MonitorOptions): Promise<void> {
       ...(opts.token ? { token: opts.token } : {}),
       ...(opts.botAgent ? { botAgent: opts.botAgent } : {}),
     }).catch(() => undefined); // Best-effort lifecycle hint.
-    emit({ type: 'started' });
+    await emit({ type: 'started' });
 
     while (!opts.signal?.aborted) {
       try {
@@ -171,7 +177,7 @@ export async function runMonitor(opts: MonitorOptions): Promise<void> {
           if (contextToken) {
             setContextToken(opts.dataDir, opts.accountId, message.from_user_id, contextToken);
           }
-          emit({ type: 'message', message });
+          await emit({ type: 'message', message });
         }
       } catch (error) {
         if (opts.signal?.aborted) break;
@@ -188,7 +194,7 @@ export async function runMonitor(opts: MonitorOptions): Promise<void> {
       ...(opts.botAgent ? { botAgent: opts.botAgent } : {}),
     }).catch(() => undefined);
     lock.release();
-    emit({ type: 'stopped' });
+    await emit({ type: 'stopped' });
   }
 }
 

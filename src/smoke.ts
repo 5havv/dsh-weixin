@@ -29,7 +29,7 @@ import {
 import { startLogin, waitForLogin } from './auth/qr-login.js';
 import { runMonitor } from './inbound.js';
 import { extractText } from './message.js';
-import { sendTextToPeer } from './outbound.js';
+import { sendMediaToPeer, sendTextToPeer } from './outbound.js';
 
 async function displayQr(url: string): Promise<void> {
   try {
@@ -252,6 +252,31 @@ async function cmdSend(dataDir: string, accountId: string, toUserId: string, tex
   );
 }
 
+/** Upload a local file and send it to one peer. */
+async function cmdSendFile(
+  dataDir: string,
+  accountId: string,
+  toUserId: string,
+  filePath: string,
+  caption?: string,
+): Promise<void> {
+  const account = resolveAccount(dataDir, accountId);
+  const result = await sendMediaToPeer({
+    dataDir,
+    accountId: account.accountId,
+    baseUrl: account.baseUrl,
+    ...(account.token ? { token: account.token } : {}),
+    toUserId,
+    filePath,
+    ...(caption ? { caption } : {}),
+    onStaleSession: (peerId) =>
+      process.stdout.write(`⚠️ ${peerId} 的 context_token 已失效，改为无 token 重发。\n`),
+  });
+  process.stdout.write(
+    `已发送 ${result.messageIds.length} 条（含媒体）message_id=${result.messageIds.join(', ')}\n`,
+  );
+}
+
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
     args: process.argv.slice(2),
@@ -290,6 +315,14 @@ async function main(): Promise<void> {
       await cmdSend(dataDir, accountId, toUserId, rest.join(' '));
       break;
     }
+    case 'sendfile': {
+      const [, accountId, toUserId, filePath, ...rest] = positionals;
+      if (!accountId || !toUserId || !filePath) {
+        throw new Error('用法：sendfile <accountId> <toUserId> <filePath> [caption…]');
+      }
+      await cmdSendFile(dataDir, accountId, toUserId, filePath, rest.join(' ') || undefined);
+      break;
+    }
     default:
       process.stdout.write(
         [
@@ -301,6 +334,7 @@ async function main(): Promise<void> {
           '  listen [accountId]                            长轮询打印入站消息',
           '  echo [accountId]                              回声模式：收到即回复（自检收发闭环）',
           '  send <accountId> <toUserId> <text…>           发送文本消息',
+          '  sendfile <accountId> <toUserId> <file> [文字]  上传并发送文件/图片/视频',
           '',
           `当前数据目录：${dataDir}（可用 --data-dir 覆盖）`,
           '',

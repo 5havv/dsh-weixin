@@ -2,13 +2,14 @@
 
 让 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）通过**个人微信**收发的渠道插件。基于腾讯 iLink Bot API，与腾讯官方 [openclaw-weixin](https://github.com/Tencent/openclaw-weixin) 及 [Hermes](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/messaging/weixin) 的微信适配器**同源同协议**。
 
-> 状态：**v0.1 / M1–M3**。已实现扫码登录、长轮询收消息、文本回复、账号存储与单实例锁；媒体收发（M4）计划在 v0.2。
+> 状态：**v0.2 / M1–M4**。已实现扫码登录、长轮询、文本与**媒体收发**（图片/文件/语音/视频）、账号存储与单实例锁。
 
 ## 它做什么
 
 | 能力 | 说明 |
 |---|---|
 | 收发文本 | 微信私聊消息 → DSH agent → 回复发回微信 |
+| 收发媒体 | 入站图片/文件/语音/视频自动下载解密并缓存；出站可用 `weixin_send` 的 `filePath` 发送本地文件 |
 | 每联系人独立会话 | 默认 `per-peer`，每个联系人一个 agent/session，记忆互不串味 |
 | 模型可调用工具 | 注册 `weixin_send`，让 agent 主动给联系人发消息 |
 | 扫码登录 | 终端二维码，无需公网地址、webhook 或 WebSocket |
@@ -53,6 +54,7 @@ npm run smoke -- list
 ```sh
 npm run smoke -- listen           # 长轮询打印入站消息
 npm run smoke -- send <accountId> <toUserId> 'hello'
+npm run smoke -- sendfile <accountId> <toUserId> ./photo.png '看图'
 ```
 
 > 注意：iLink 允许**同一 token 只有一个在线实例**。若 Hermes gateway 正在运行，请先 `systemctl --user stop hermes-gateway`，否则游标会互相抢占。
@@ -117,6 +119,10 @@ dsh plugin --profile web add @5havv/dsh-weixin
 | `botAgent` | `dsh-weixin` | 请求里的 `bot_agent` 自声明 |
 | `toolEnabled` | `true` | 是否注册 `weixin_send` 工具 |
 | `maxMessageLength` | `4000` | 单条消息字符上限，超出按逻辑边界分块 |
+| `mediaEnabled` | `true` | 是否下载并解密入站媒体 |
+| `mediaMaxBytes` | `20971520` | 单个媒体文件字节上限（20 MiB） |
+| `mediaCacheDir` | `<dataDir>/media` | 解密后媒体的缓存目录 |
+| `cdnBaseUrl` | 官方 CDN | 媒体 CDN 基址 |
 
 ### 桥接（`weixin-bridge`）
 
@@ -129,13 +135,17 @@ dsh plugin --profile web add @5havv/dsh-weixin
 | `groupPolicy` | `disabled` | 群消息策略（iLink bot 通常收不到群消息） |
 | `groupAllowlist` | `[]` | `groupPolicy=allowlist` 时生效 |
 | `agentPreset` / `provider` / `model` | 空 | 透传给桥接创建的 agent |
+| `attachImages` | `true` | 把入站图片交给 attachment 服务，视觉模型可直接看图 |
+| `mediaMaxBytes` | `20971520` | 交给 agent 前拒绝超过该大小的媒体 |
 
 ## 已知限制
 
 - **个人微信 / iLink bot 身份**：扫码后连接的是一个 bot 身份，多数账号类型**收不到普通微信群消息**，稳定可用场景是私聊。
 - **单实例**：同一 token 同时只能有一个消费者在线（本实现用文件锁保证并给出明确报错）。
 - **会话刷新**：若联系人长期未发消息，`context_token` 会失效；发送时自动降级为无 token 重发，仍失败则需该联系人先给 bot 发一条消息。
-- **v0.1 仅文本**：图片/文件/语音/视频尚未处理。
+- **语音**：微信语音是 SILK 编码，本插件**不做转码**（不引入 wasm 依赖），只缓存原始 SILK 文件；若平台提供了转写文本会一并交给 agent。
+- **图片可见性**：取决于所配模型是否支持视觉输入；不支持时图片仍会缓存并告知路径。
+- **缩略图**：出站媒体使用 `no_need_thumb`，不生成缩略图。
 
 ## 致谢
 

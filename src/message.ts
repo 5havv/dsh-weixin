@@ -8,6 +8,83 @@
 import crypto from 'node:crypto';
 
 import { MessageItemType, MessageType, type MessageItem, type WeixinMessage } from './protocol/types.js';
+import type { UploadedMedia } from './media.js';
+
+/**
+ * Shared media envelope fields for a newly built outbound item.
+ *
+ * The key travels base64-encoded over its ASCII hex form, which is the encoding
+ * the backend expects on this direction (inbound keys arrive in either form).
+ */
+function cdnMediaRef(uploaded: UploadedMedia): {
+  encrypt_query_param: string;
+  aes_key: string;
+  encrypt_type: number;
+} {
+  return {
+    encrypt_query_param: uploaded.downloadEncryptedQueryParam,
+    aes_key: Buffer.from(uploaded.aeskeyHex).toString('base64'),
+    encrypt_type: 1,
+  };
+}
+
+/**
+ * Build the message item for one uploaded file, classified by its type.
+ *
+ * @param uploaded - the CDN upload result.
+ * @param fileName - display name, used for plain file attachments.
+ * @returns the item to place in `item_list`.
+ */
+export function buildMediaItem(uploaded: UploadedMedia, fileName?: string): MessageItem {
+  switch (uploaded.mediaType) {
+    case 1:
+      return {
+        type: MessageItemType.IMAGE,
+        image_item: { media: cdnMediaRef(uploaded), mid_size: uploaded.fileSizeCiphertext },
+      };
+    case 2:
+      return {
+        type: MessageItemType.VIDEO,
+        video_item: { media: cdnMediaRef(uploaded), video_size: uploaded.fileSizeCiphertext },
+      };
+    default:
+      return {
+        type: MessageItemType.FILE,
+        file_item: {
+          media: cdnMediaRef(uploaded),
+          ...(fileName ? { file_name: fileName } : {}),
+          len: String(uploaded.fileSize),
+        },
+      };
+  }
+}
+
+/**
+ * Build an outbound message carrying exactly one item.
+ *
+ * Each media item is sent as its own request so `item_list` always holds a
+ * single entry, which is what the backend expects.
+ *
+ * @param toUserId - target peer id.
+ * @param item - the item to send.
+ * @param contextToken - conversation token from the inbound message.
+ * @returns the message payload for `sendmessage`.
+ */
+export function buildItemMessage(
+  toUserId: string,
+  item: MessageItem,
+  contextToken?: string,
+): WeixinMessage {
+  return {
+    from_user_id: '',
+    to_user_id: toUserId,
+    client_id: generateClientId(),
+    message_type: MessageType.BOT,
+    message_state: 2,
+    item_list: [item],
+    ...(contextToken ? { context_token: contextToken } : {}),
+  };
+}
 
 /**
  * Extract the concatenated text of a message's text items.

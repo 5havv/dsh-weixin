@@ -34,6 +34,14 @@ export interface BridgeConfig {
   provider?: string;
   /** Model id for bridge-created agents; defaults to the deployment default. */
   model?: string;
+  /**
+   * Hand inbound images to the attachment service so a vision model can see
+   * them. When false (or when no attachment service is mounted) the image is
+   * only cached on disk and its path is described in the message text.
+   */
+  attachImages?: boolean;
+  /** Byte ceiling for one inbound media file; defaults to 20 MiB. */
+  mediaMaxBytes?: number;
 }
 
 /** Schemastery schema for {@link BridgeConfig}. */
@@ -47,4 +55,6 @@ export const Config: Schema<BridgeConfig> = Schema.object({
   agentPreset: Schema.string().default(''),
   provider: Schema.string().default(''),
   model: Schema.string().default(''),
+  attachImages: Schema.boolean().default(true),
+  mediaMaxBytes: Schema.number().default(20 * 1024 * 1024),
 });
