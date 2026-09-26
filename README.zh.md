@@ -136,7 +136,7 @@ dsh plugin --profile web add @5havv/dsh-weixin
 | `groupPolicy` | `disabled` | 群消息策略（iLink bot 通常收不到群消息） |
 | `groupAllowlist` | `[]` | `groupPolicy=allowlist` 时生效 |
 | `agentPreset` / `provider` / `model` | 空 | 透传给桥接创建的 agent |
-| `attachImages` | `true` | 把入站图片交给 attachment 服务，视觉模型可直接看图 |
+| `attachImages` | `true` | 把入站图片交给 attachment 服务（`ctx.attachments`），视觉模型可直接看图；实测 deepseek-flash 支持读图 |
 | `mediaMaxBytes` | `20971520` | 交给 agent 前拒绝超过该大小的媒体 |
 
 ## 安全说明
@@ -159,7 +159,7 @@ dsh plugin --profile web add @5havv/dsh-weixin
 - **单实例**：同一 token 同时只能有一个消费者在线（本实现用文件锁保证并给出明确报错）。
 - **会话刷新**：若联系人长期未发消息，`context_token` 会失效；发送时自动降级为无 token 重发，仍失败则需该联系人先给 bot 发一条消息。
 - **语音**：微信语音是 SILK 编码，本插件**不做转码**（不引入 wasm 依赖），只缓存原始 SILK 文件；若平台提供了转写文本会一并交给 agent。
-- **图片可见性**：取决于所配模型是否支持视觉输入；不支持时图片仍会缓存并告知路径。
+- **图片可见性**：实测 `deepseek-flash` 可直接读图。若换成不支持视觉的模型，把 `attachImages` 设为 `false`，图片仍会缓存并把路径告知 agent。
 - **缩略图**：出站媒体使用 `no_need_thumb`，不生成缩略图。
 
 ## 致谢
