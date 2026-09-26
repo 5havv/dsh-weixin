@@ -1,6 +1,6 @@
 {
   "name": "@5havv/dsh-weixin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DeepSeek Harness (DSH) WeChat/Weixin channel plugin over Tencent's iLink Bot API",
   "keywords": [
     "deepseek-harness",
@@ -57,7 +57,11 @@
     "test": "vitest run",
     "verify": "tsx scripts/verify-plugin.ts && tsx scripts/verify-bridge.ts",
     "smoke": "tsx src/smoke.ts",
-    "dev": "npm run build && dsh --profile web --patch ./examples/cordis.dev.yml"
+    "dev": "npm run build && dsh --profile web --patch ./examples/cordis.dev.yml",
+    "prepublishOnly": "npm run typecheck && npm test && npm run verify && npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "qrcode-terminal": "^0.12.0"
