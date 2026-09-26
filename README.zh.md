@@ -86,7 +86,7 @@ dsh plugin --profile web add @5havv/dsh-weixin
 dsh plugin --profile web add github:5havv/dsh-weixin
 
 # ③ 本地 tarball（不需要任何构建授权）
-pnpm pack && dsh plugin --profile web add ./5havv-dsh-weixin-0.1.0.tgz
+pnpm pack && dsh plugin --profile web add ./5havv-dsh-weixin-0.2.0.tgz
 ```
 
 > **关于方式 ②**：git 安装拉的是**源码**，由本包的 `prepare` 脚本（`tsc -p tsconfig.build.json`）在安装时构建出 `lib/`。
