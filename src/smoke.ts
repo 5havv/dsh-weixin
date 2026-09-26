@@ -13,6 +13,7 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline';
 
@@ -29,7 +30,13 @@ import {
 import { startLogin, waitForLogin } from './auth/qr-login.js';
 import { runMonitor } from './inbound.js';
 import { extractText } from './message.js';
-import { sendMediaToPeer, sendTextToPeer } from './outbound.js';
+import { materializeInboundMedia } from './media.js';
+import {
+  DEFAULT_MAX_MEDIA_BYTES,
+  sendMediaToPeer,
+  sendTextToPeer,
+} from './outbound.js';
+import { CDN_BASE_URL } from './protocol/cdn.js';
 
 async function displayQr(url: string): Promise<void> {
   try {
@@ -43,6 +50,11 @@ async function displayQr(url: string): Promise<void> {
     // Terminal rendering is optional; the URL below still works.
   }
   process.stdout.write(`二维码链接（无法扫码时可在微信中打开）：\n${url}\n\n`);
+}
+
+/** Where this CLI caches decrypted inbound media (mirrors the service default). */
+function mediaRoot(dataDir: string): string {
+  return path.join(dataDir, 'media');
 }
 
 function ask(prompt: string): Promise<string> {
@@ -147,7 +159,7 @@ async function cmdListen(dataDir: string, requested?: string): Promise<void> {
     ...(token ? { token } : {}),
     dataDir,
     signal: controller.signal,
-    onEvent: (event) => {
+    onEvent: async (event) => {
       switch (event.type) {
         case 'started':
           process.stdout.write('已连接，等待消息…\n');
@@ -161,6 +173,24 @@ async function cmdListen(dataDir: string, requested?: string): Promise<void> {
               `  text=${JSON.stringify(text)}\n` +
               `  context_token=${message.context_token ? 'yes' : 'no'}\n`,
           );
+          // Retrieve and cache any media so the whole inbound path is exercised
+          // here too, without needing a DSH instance in the loop.
+          const { media, failures } = await materializeInboundMedia({
+            itemList: message.item_list ?? [],
+            cdnBaseUrl: CDN_BASE_URL,
+            maxBytes: DEFAULT_MAX_MEDIA_BYTES,
+            cacheDir: path.join(mediaRoot(dataDir), accountId.replace(/[^\w.@-]/g, '_')),
+            label: `smoke[${accountId}]`,
+          });
+          for (const item of media) {
+            process.stdout.write(
+              `  media[${item.kind}] ${item.mime} ${item.size}B -> ${item.path}` +
+                `${item.transcript ? ` transcript=${JSON.stringify(item.transcript)}` : ''}\n`,
+            );
+          }
+          for (const failure of failures) {
+            process.stdout.write(`  media[${failure.kind}] FAILED: ${failure.reason}\n`);
+          }
           break;
         }
         case 'stale-token':

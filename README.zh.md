@@ -52,7 +52,7 @@ npm run smoke -- list
 ### 收发测试（不经过 DSH）
 
 ```sh
-npm run smoke -- listen           # 长轮询打印入站消息
+npm run smoke -- listen           # 长轮询：打印入站消息并下载解密其中的媒体
 npm run smoke -- send <accountId> <toUserId> 'hello'
 npm run smoke -- sendfile <accountId> <toUserId> ./photo.png '看图'
 ```

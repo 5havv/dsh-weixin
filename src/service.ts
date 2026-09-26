@@ -23,12 +23,12 @@ import {
 import { Config as ConfigSchema, type Config as WeixinConfig } from './config.js';
 import { runMonitor } from './inbound.js';
 import {
-  fetchInboundMedia,
-  hasMedia,
-  mediaCacheName,
-  mediaKindOfItem,
-  writeMediaCache,
+  materializeInboundMedia,
+  type WeixinMediaAttachment,
+  type WeixinMediaFailure,
 } from './media.js';
+
+export type { WeixinMediaAttachment, WeixinMediaFailure } from './media.js';
 import { extractText } from './message.js';
 import {
   DEFAULT_MAX_MEDIA_BYTES,
@@ -39,26 +39,6 @@ import {
 import { CDN_BASE_URL } from './protocol/cdn.js';
 import type { MessageItem } from './protocol/types.js';
 import { applyWeixinSendTool } from './tool.js';
-
-/** One decrypted inbound media file, cached on disk for the agent to open. */
-export interface WeixinMediaAttachment {
-  kind: 'image' | 'file' | 'voice' | 'video';
-  mime: string;
-  /** Display name of the cached file. */
-  name: string;
-  /** Absolute path of the cached decrypted file. */
-  path: string;
-  /** Decrypted size in bytes. */
-  size: number;
-  /** Platform-provided speech-to-text, for voice messages. */
-  transcript?: string;
-}
-
-/** A media item that could not be retrieved. */
-export interface WeixinMediaFailure {
-  kind: 'image' | 'file' | 'voice' | 'video';
-  reason: string;
-}
 
 /** A normalized inbound WeChat message handed to consumers. */
 export interface WeixinInboundMessage {
@@ -324,42 +304,18 @@ export class WeixinService extends Service {
     accountId: string,
     itemList: MessageItem[],
   ): Promise<{ media: WeixinMediaAttachment[]; mediaFailures: WeixinMediaFailure[] }> {
-    const media: WeixinMediaAttachment[] = [];
-    const mediaFailures: WeixinMediaFailure[] = [];
-    if (this.settings.mediaEnabled === false) return { media, mediaFailures };
-
-    for (const item of itemList) {
-      if (!hasMedia(item)) continue;
-      const label = `weixin[${accountId}]`;
-      try {
-        const fetched = await fetchInboundMedia({
-          item,
-          cdnBaseUrl: this.cdnBaseUrl,
-          maxBytes: this.settings.mediaMaxBytes ?? DEFAULT_MAX_MEDIA_BYTES,
-          label,
-        });
-        if (!fetched) continue;
-        const fileName = mediaCacheName(fetched.name, fetched.mime, `.${fetched.kind}`);
-        const filePath = writeMediaCache({
-          cacheDir: path.join(this.mediaCacheDir, accountId.replace(/[^\w.@-]/g, '_')),
-          name: fileName,
-          data: fetched.data,
-        });
-        media.push({
-          kind: fetched.kind,
-          mime: fetched.mime,
-          name: fileName,
-          path: filePath,
-          size: fetched.data.length,
-          ...(fetched.transcript ? { transcript: fetched.transcript } : {}),
-        });
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.ctx.logger?.warn?.(`weixin: inbound media failed (${label}): ${reason}`);
-        mediaFailures.push({ kind: mediaKindOfItem(item), reason });
-      }
+    if (this.settings.mediaEnabled === false) return { media: [], mediaFailures: [] };
+    const { media, failures } = await materializeInboundMedia({
+      itemList,
+      cdnBaseUrl: this.cdnBaseUrl,
+      maxBytes: this.settings.mediaMaxBytes ?? DEFAULT_MAX_MEDIA_BYTES,
+      cacheDir: path.join(this.mediaCacheDir, accountId.replace(/[^\w.@-]/g, '_')),
+      label: `weixin[${accountId}]`,
+    });
+    for (const failure of failures) {
+      this.ctx.logger?.warn?.(`weixin: inbound media failed (${failure.kind}): ${failure.reason}`);
     }
-    return { media, mediaFailures };
+    return { media, mediaFailures: failures };
   }
 
   /**

@@ -31,6 +31,26 @@ export interface InboundMedia {
   transcript?: string;
 }
 
+/** One decrypted inbound media file, cached on disk for the agent to open. */
+export interface WeixinMediaAttachment {
+  kind: 'image' | 'file' | 'voice' | 'video';
+  mime: string;
+  /** Display name of the cached file. */
+  name: string;
+  /** Absolute path of the cached decrypted file. */
+  path: string;
+  /** Decrypted size in bytes. */
+  size: number;
+  /** Platform-provided speech-to-text, for voice messages. */
+  transcript?: string;
+}
+
+/** A media item that could not be retrieved. */
+export interface WeixinMediaFailure {
+  kind: 'image' | 'file' | 'voice' | 'video';
+  reason: string;
+}
+
 /** Result of pushing one local file to the CDN. */
 export interface UploadedMedia {
   /** `UploadMediaType` used for this upload. */
@@ -383,4 +403,55 @@ export async function uploadOutboundMedia(params: {
     fileSize: rawsize,
     fileSizeCiphertext: filesize,
   };
+}
+
+/**
+ * Download, decrypt, and cache every media item in one inbound message.
+ *
+ * A failure on one item never discards the message: it is reported through
+ * `failures` so the consumer can tell the contact what went wrong.
+ *
+ * @param params - the items, CDN base URL, limits, and where to cache.
+ * @returns the cached attachments and the failures, in item order.
+ */
+export async function materializeInboundMedia(params: {
+  itemList: readonly MessageItem[];
+  cdnBaseUrl: string;
+  maxBytes: number;
+  /** Directory the decrypted files are written under. */
+  cacheDir: string;
+  /** Label used in error messages. */
+  label: string;
+}): Promise<{ media: WeixinMediaAttachment[]; failures: WeixinMediaFailure[] }> {
+  const media: WeixinMediaAttachment[] = [];
+  const failures: WeixinMediaFailure[] = [];
+
+  for (const item of params.itemList) {
+    if (!hasMedia(item)) continue;
+    try {
+      const fetched = await fetchInboundMedia({
+        item,
+        cdnBaseUrl: params.cdnBaseUrl,
+        maxBytes: params.maxBytes,
+        label: params.label,
+      });
+      if (!fetched) continue;
+      const name = mediaCacheName(fetched.name, fetched.mime, `.${fetched.kind}`);
+      const filePath = writeMediaCache({ cacheDir: params.cacheDir, name, data: fetched.data });
+      media.push({
+        kind: fetched.kind,
+        mime: fetched.mime,
+        name,
+        path: filePath,
+        size: fetched.data.length,
+        ...(fetched.transcript ? { transcript: fetched.transcript } : {}),
+      });
+    } catch (error) {
+      failures.push({
+        kind: mediaKindOfItem(item),
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return { media, failures };
 }
