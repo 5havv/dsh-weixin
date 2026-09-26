@@ -80,6 +80,30 @@ dsh --profile web --patch ./examples/cordis.dev.yml                 # 实际启�
 dsh plugin --profile web add @5havv/dsh-weixin
 ```
 
+或者，不改动 profile 依赖、直接改它的 patch 层（**实测支持热加载，无需重启**）：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- insert:
+    - id: weixin
+      name: '/absolute/path/to/dsh-weixin/lib/index.js'
+      config:
+        dataDir: ''
+        autoConnect: true
+        toolEnabled: true
+    - id: weixin-bridge
+      name: '/absolute/path/to/dsh-weixin/lib/bridge/index.js'
+      config:
+        enabled: true
+        sessionMode: per-peer
+        dmPolicy: allowlist
+        allowlist:
+          - '<你的对端 id>@im.wechat'
+```
+
+> ⚠️ **只跑一个 DSH 实例。** iLink 同一 token 只允许一个在线消费者，本插件用文件锁保证这一点并会明确报错。
+> 若两个实例共享同一个 `$DSH_HOME/sessions`，后启动的那个既无法 `resume`（会话写句柄被前者持有）、也无法 `create`（会话已存在）——插件会自动降级到 `<sessionId>:b` 这个备用会话继续服务，但那意味着**历史不连续**。正确做法是让插件跑在你唯一的主实例里。
+
 ## 配置
 
 ### 渠道服务（`weixin`）
