@@ -36,10 +36,18 @@ dsh plugin --profile web add github:5havv/dsh-weixin
 
 > A git install fetches **source**, which this package builds through its
 > `prepare` script. pnpm >= 10 refuses to run a git dependency's build script
-> until you allow it: copy the package key pnpm prints into that profile's
-> `pnpm-workspace.yaml` under `allowBuilds`. Treat that as permission for the
-> package to execute code on your machine at install time, and pin a commit
-> (`github:5havv/dsh-weixin#<sha>`) when you can.
+> until you allow it, so the first `add` fails and prints a long allow key —
+> copy that line **verbatim** into the profile's `pnpm-workspace.yaml`:
+>
+> ```yaml
+> allowBuilds:
+>   "@5havv/dsh-weixin@https://codeload.github.com/5havv/dsh-weixin/tar.gz/<commit>": true
+> ```
+>
+> Note the **double quotes**: `@` cannot start a plain YAML scalar, and an
+> unquoted key makes pnpm fail with `Failed to parse pnpm-workspace.yaml`.
+> Treat this as permission for the package to execute code on your machine at
+> install time, and pin a commit (`github:5havv/dsh-weixin#<sha>`) when you can.
 
 ## Quick start
 

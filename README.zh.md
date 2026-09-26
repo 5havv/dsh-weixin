@@ -90,11 +90,16 @@ pnpm pack && dsh plugin --profile web add ./5havv-dsh-weixin-0.1.0.tgz
 ```
 
 > **关于方式 ②**：git 安装拉的是**源码**，由本包的 `prepare` 脚本（`tsc -p tsconfig.build.json`）在安装时构建出 `lib/`。
-> pnpm ≥10 默认拒绝运行 git 依赖的构建脚本，首次 `add` 会失败并提示你授权——把 pnpm 打印出的包键加进该 profile 的 `pnpm-workspace.yaml`：
+>
+> pnpm ≥ 10 默认拒绝运行 git 依赖的构建脚本，所以首次 `add` 会失败并打印一个允许键。**必须把那一行逐字复制**进该 profile 的 `pnpm-workspace.yaml`——它不是一个简单的包名，而是带完整 tarball URL 和 commit 的长键：
+>
 > ```yaml
 > allowBuilds:
->   '@5havv/dsh-weixin': true
+>   "@5havv/dsh-weixin@https://codeload.github.com/5havv/dsh-weixin/tar.gz/<commit>": true
 > ```
+>
+> ⚠️ **键必须加双引号**：`@` 开头不是合法的 YAML 标量，不加引号 pnpm 会直接报 `Failed to parse pnpm-workspace.yaml`（这个坑是实测踩出来的）。
+>
 > 请把这视为**允许该包在安装时于你机器上执行代码**，只对可信来源授权，并尽量锁定 commit：`github:5havv/dsh-weixin#<sha>`。
 
 或者，不改动 profile 依赖、直接改它的 patch 层（**实测支持热加载，无需重启**）：

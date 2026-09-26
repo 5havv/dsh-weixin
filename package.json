@@ -27,6 +27,11 @@
     "node": ">=22"
   },
   "ilink_appid": "bot",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "exports": {
