@@ -1,6 +1,6 @@
 {
   "name": "@5havv/dsh-weixin",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DeepSeek Harness (DSH) WeChat/Weixin channel plugin over Tencent's iLink Bot API",
   "keywords": [
     "deepseek-harness",
@@ -48,7 +48,7 @@
     "lib",
     "cordis.patch.yml",
     "README.md",
-    "README.zh.md"
+    "README.en.md"
   ],
   "scripts": {
     "prepare": "tsc -p tsconfig.build.json",
