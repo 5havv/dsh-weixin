@@ -1,5 +1,9 @@
 # @5havv/dsh-weixin
 
+[![npm](https://img.shields.io/npm/v/@5havv/dsh-weixin?logo=npm)](https://www.npmjs.com/package/@5havv/dsh-weixin)
+[![CI](https://github.com/5havv/dsh-weixin/actions/workflows/ci.yml/badge.svg)](https://github.com/5havv/dsh-weixin/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/@5havv/dsh-weixin)](./LICENSE)
+
 让 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）通过**个人微信**收发的渠道插件。基于腾讯 iLink Bot API，与腾讯官方 [openclaw-weixin](https://github.com/Tencent/openclaw-weixin) 及 [Hermes](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/messaging/weixin) 的微信适配器**同源同协议**。
 
 > 状态：**v0.2 / M1–M4**。已实现扫码登录、长轮询、文本与**媒体收发**（图片/文件/语音/视频）、账号存储与单实例锁。

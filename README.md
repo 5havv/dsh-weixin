@@ -1,5 +1,9 @@
 # @5havv/dsh-weixin
 
+[![npm](https://img.shields.io/npm/v/@5havv/dsh-weixin?logo=npm)](https://www.npmjs.com/package/@5havv/dsh-weixin)
+[![CI](https://github.com/5havv/dsh-weixin/actions/workflows/ci.yml/badge.svg)](https://github.com/5havv/dsh-weixin/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/@5havv/dsh-weixin)](./LICENSE)
+
 A **personal WeChat** channel plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH), built on Tencent's iLink Bot API — the same protocol used by Tencent's own [openclaw-weixin](https://github.com/Tencent/openclaw-weixin) channel and by [Hermes](https://hermes-agent.nousresearch.com/docs/zh-Hans/user-guide/messaging/weixin).
 
 > Status: **v0.2 / milestones M1–M4**. QR login, long-poll receive, text and **media** (images, files, voice, video) in both directions, account storage, and the single-instance token lock.
