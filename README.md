@@ -98,6 +98,10 @@ Outbound files are therefore confined to `mediaSendRoots` (default: the process 
 Protocol reference: [Tencent/openclaw-weixin](https://github.com/Tencent/openclaw-weixin) and
 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) (both MIT).
 
+## Maintainers
+
+See [`RELEASING.md`](./RELEASING.md) for the release runbook.
+
 ## License
 
 MIT

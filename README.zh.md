@@ -193,6 +193,10 @@ pnpm pack && dsh plugin --profile web add ./5havv-dsh-weixin-0.2.0.tgz
 - [Tencent/openclaw-weixin](https://github.com/Tencent/openclaw-weixin) — 公开了完整的 iLink 后端 API 协议
 - [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) — `gateway/platforms/weixin.py`，其会话过期降级策略被本实现采纳
 
+## 维护者
+
+发布流程见 [`RELEASING.md`](./RELEASING.md)。
+
 ## License
 
 MIT
