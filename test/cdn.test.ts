@@ -35,11 +35,16 @@ describe('AES-128-ECB', () => {
 
   it('rejects a ciphertext that is not a whole number of blocks', () => {
     // Deterministic by construction: OpenSSL refuses a final block that is not
-    // 16 bytes, regardless of the key. (Corrupting a ciphertext byte instead
-    // would be flaky — ECB decryption scrambles the whole final block, so the
-    // resulting padding is valid roughly once in 256.)
-    expect(() => decryptAesEcb(Buffer.alloc(17), crypto.randomBytes(16))).toThrow();
-    expect(() => decryptAesEcb(Buffer.alloc(0), crypto.randomBytes(16))).not.toThrow();
+    // 16 bytes, whatever the key — verified for every length below. (Two shapes
+    // that would be flaky instead: corrupting a ciphertext byte scrambles the
+    // whole final block, and a random key on a valid-length ciphertext hits
+    // valid padding about once in 256.)
+    for (const length of [0, 1, 15, 17, 31]) {
+      expect(
+        () => decryptAesEcb(Buffer.alloc(length), crypto.randomBytes(16)),
+        `${length}-byte ciphertext`,
+      ).toThrow(/wrong final block length/);
+    }
   });
 
   it('never recovers the plaintext under a wrong key', () => {
