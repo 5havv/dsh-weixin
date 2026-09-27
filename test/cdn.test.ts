@@ -33,10 +33,28 @@ describe('AES-128-ECB', () => {
     }
   });
 
-  it('rejects a wrong key rather than returning garbage', () => {
-    const ciphertext = encryptAesEcb(Buffer.from('secret'), crypto.randomBytes(16));
-    // A wrong key almost always fails the padding check.
-    expect(() => decryptAesEcb(ciphertext, crypto.randomBytes(16))).toThrow();
+  it('rejects a ciphertext that is not a whole number of blocks', () => {
+    // Deterministic by construction: OpenSSL refuses a final block that is not
+    // 16 bytes, regardless of the key. (Corrupting a ciphertext byte instead
+    // would be flaky — ECB decryption scrambles the whole final block, so the
+    // resulting padding is valid roughly once in 256.)
+    expect(() => decryptAesEcb(Buffer.alloc(17), crypto.randomBytes(16))).toThrow();
+    expect(() => decryptAesEcb(Buffer.alloc(0), crypto.randomBytes(16))).not.toThrow();
+  });
+
+  it('never recovers the plaintext under a wrong key', () => {
+    // A random key may occasionally produce valid padding, so asserting a throw
+    // here would be flaky (~1 in 256). What is certain is that it cannot return
+    // the original plaintext.
+    const plaintext = Buffer.from('secret');
+    const ciphertext = encryptAesEcb(plaintext, crypto.randomBytes(16));
+    let recovered: Buffer | undefined;
+    try {
+      recovered = decryptAesEcb(ciphertext, crypto.randomBytes(16));
+    } catch {
+      recovered = undefined; // Invalid padding: the usual outcome.
+    }
+    expect(recovered?.equals(plaintext) ?? false).toBe(false);
   });
 });
 
